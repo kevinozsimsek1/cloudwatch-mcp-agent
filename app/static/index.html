@@ -309,6 +309,28 @@
       overflow-y: auto;
     }
 
+    .expand-list-btn {
+      margin-top: .6rem;
+      padding: .45rem .75rem;
+      font-size: .75rem;
+      font-family: inherit;
+      color: var(--accent);
+      background: rgba(255,153,0,.1);
+      border: 1px solid rgba(255,153,0,.35);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .expand-list-btn:hover {
+      background: rgba(255,153,0,.18);
+    }
+
+    .list-body {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .78rem;
+      line-height: 1.55;
+    }
+
     .tools-section {
       margin-top: .75rem;
       border: 1px solid var(--border);
@@ -453,7 +475,261 @@
       border-color: var(--error);
       color: var(--error);
     }
+
+    .view-tabs {
+      display: flex;
+      gap: .35rem;
+      margin-bottom: .75rem;
+    }
+
+    .view-tab {
+      padding: .45rem .85rem;
+      font-size: .8rem;
+      font-family: inherit;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .view-tab.active {
+      border-color: var(--accent);
+      background: rgba(255,153,0,.15);
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .dashboard-panel {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.25rem 1.5rem 1.5rem;
+      display: none;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .dashboard-panel.active { display: flex; }
+
+    .dashboard-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .75rem;
+      font-size: .8rem;
+      color: var(--muted);
+    }
+
+    .dashboard-toolbar select {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: .35rem .5rem;
+      font-family: inherit;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    @media (max-width: 960px) {
+      .dashboard-grid { grid-template-columns: 1fr; }
+    }
+
+    .widget {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      min-height: 200px;
+    }
+
+    .widget.span-2 { grid-column: span 2; }
+    @media (max-width: 960px) {
+      .widget.span-2 { grid-column: span 1; }
+    }
+
+    .widget-title {
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: .75rem;
+    }
+
+    .stat-value {
+      font-size: 2.4rem;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    .stat-sub {
+      margin-top: .5rem;
+      font-size: .8rem;
+      color: var(--muted);
+    }
+
+    .alarm-list {
+      margin-top: .75rem;
+      max-height: 140px;
+      overflow-y: auto;
+      font-size: .78rem;
+      font-family: "IBM Plex Mono", monospace;
+    }
+
+    .alarm-list div {
+      padding: .25rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .chart-wrap {
+      position: relative;
+      height: 260px;
+    }
+
+    .dashboard-status {
+      font-size: .75rem;
+      color: var(--muted);
+    }
+
+    .error-table-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .6rem;
+      margin-bottom: .75rem;
+    }
+
+    .error-table-toolbar input,
+    .error-table-toolbar select {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: .4rem .55rem;
+      font-family: inherit;
+      font-size: .78rem;
+    }
+
+    .error-table-toolbar input { min-width: 180px; flex: 1; }
+
+    .error-table-wrap {
+      overflow: auto;
+      max-height: 520px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .error-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .76rem;
+    }
+
+    .error-table th,
+    .error-table td {
+      padding: .55rem .65rem;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .error-table th {
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: .7rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      z-index: 1;
+    }
+
+    .error-table tbody tr:hover { background: rgba(255,153,0,.06); }
+    .error-table tbody tr { cursor: pointer; }
+
+    .error-table .col-time {
+      white-space: nowrap;
+      color: var(--muted);
+      font-family: "IBM Plex Mono", monospace;
+      width: 150px;
+    }
+
+    .error-table .col-group {
+      font-family: "IBM Plex Mono", monospace;
+      color: #9ec5fe;
+      max-width: 220px;
+      word-break: break-all;
+    }
+
+    .error-table .col-message {
+      font-family: "IBM Plex Mono", monospace;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .error-detail-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 1rem;
+    }
+
+    .error-detail-modal.open { display: flex; }
+
+    .error-detail-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      max-width: 900px;
+      width: 100%;
+      max-height: 80vh;
+      overflow: auto;
+      padding: 1rem;
+    }
+
+    .error-detail-card h3 {
+      margin: 0 0 .5rem;
+      font-size: .9rem;
+    }
+
+    .error-detail-meta {
+      font-size: .75rem;
+      color: var(--muted);
+      margin-bottom: .75rem;
+      line-height: 1.5;
+    }
+
+    .error-detail-body {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .78rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .75rem;
+    }
+
+    .error-detail-close {
+      margin-top: .75rem;
+      padding: .45rem .8rem;
+      font-size: .78rem;
+    }
+
+    .chat-view.hidden { display: none !important; }
+    .input-area.hidden { display: none !important; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="layout" id="layout">
@@ -497,22 +773,103 @@
     </aside>
 
     <main class="main">
-      <header class="chat-header" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
-        <div>
-          <h2 id="chatTitle">Observability Chat</h2>
-          <p>Doğal dilde sor, agent CloudWatch tool'larını çağırsın</p>
+      <header class="chat-header">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;">
+          <div>
+            <div class="view-tabs">
+              <button type="button" class="view-tab active" id="tabChat">Chat</button>
+              <button type="button" class="view-tab" id="tabDashboard">Dashboard</button>
+            </div>
+            <h2 id="chatTitle">Observability Chat</h2>
+            <p id="chatSubtitle">Doğal dilde sor, agent CloudWatch tool'larını çağırsın</p>
+          </div>
+          <button class="prompt-btn" id="toggleSidebarBtn" style="width:auto;margin:0;padding:.5rem .7rem;font-size:.75rem;">Paneli Kapat</button>
         </div>
-        <button class="prompt-btn" id="toggleSidebarBtn" style="width:auto;margin:0;padding:.5rem .7rem;font-size:.75rem;">Paneli Kapat</button>
       </header>
 
-      <div class="messages" id="messages">
+      <div class="messages chat-view" id="messages">
         <div class="welcome" id="welcome">
           <h3>Merhaba 👋</h3>
           <p>CloudWatch log, metric ve alarm sorularını sorabilirsin. Agent LLM ile tool seçip AWS'den veri çeker.</p>
         </div>
       </div>
 
-      <div class="input-area">
+      <div class="dashboard-panel" id="dashboardPanel">
+        <div class="dashboard-toolbar">
+          <label>
+            Zaman aralığı
+            <select id="dashboardHours">
+              <option value="1">Son 1 saat</option>
+              <option value="6">Son 6 saat</option>
+              <option value="24" selected>Son 24 saat</option>
+              <option value="72">Son 72 saat</option>
+            </select>
+          </label>
+          <button type="button" class="prompt-btn" id="dashboardRefreshBtn" style="margin:0;padding:.4rem .7rem;font-size:.75rem;">Yenile</button>
+          <span class="dashboard-status" id="dashboardStatus">Yükleniyor...</span>
+        </div>
+
+        <div class="dashboard-grid">
+          <div class="widget">
+            <div class="widget-title">Aktif alarmlar</div>
+            <div class="stat-value" id="alarmCount">—</div>
+            <div class="stat-sub" id="alarmSub">CloudWatch ALARM durumu</div>
+            <div class="alarm-list" id="alarmList"></div>
+          </div>
+
+          <div class="widget">
+            <div class="widget-title">Toplam hata (log)</div>
+            <div class="stat-value" id="errorTotal">—</div>
+            <div class="stat-sub" id="errorSub">Seçili aralıkta error/5XX satırları</div>
+          </div>
+
+          <div class="widget span-2">
+            <div class="widget-title">Hata zaman çizelgesi</div>
+            <div class="chart-wrap"><canvas id="timelineChart"></canvas></div>
+          </div>
+
+          <div class="widget span-2">
+            <div class="widget-title">Log group başına hata</div>
+            <div class="chart-wrap"><canvas id="byGroupChart"></canvas></div>
+          </div>
+
+          <div class="widget span-2" id="errorTableWidget">
+            <div class="widget-title">Hata detayları</div>
+            <div class="error-table-toolbar">
+              <select id="errorGroupFilter">
+                <option value="">Tüm log group'lar</option>
+              </select>
+              <input type="search" id="errorSearchInput" placeholder="Mesajda ara..." />
+              <span class="dashboard-status" id="errorTableStatus">Yükleniyor...</span>
+            </div>
+            <div class="error-table-wrap">
+              <table class="error-table">
+                <thead>
+                  <tr>
+                    <th>Zaman</th>
+                    <th>Log group</th>
+                    <th>Mesaj</th>
+                  </tr>
+                </thead>
+                <tbody id="errorTableBody">
+                  <tr><td colspan="3" style="color:var(--muted)">Yükleniyor...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="error-detail-modal" id="errorDetailModal">
+        <div class="error-detail-card">
+          <h3>Hata detayı</h3>
+          <div class="error-detail-meta" id="errorDetailMeta"></div>
+          <div class="error-detail-body" id="errorDetailBody"></div>
+          <button type="button" class="prompt-btn error-detail-close" id="errorDetailClose">Kapat</button>
+        </div>
+      </div>
+
+      <div class="input-area" id="inputArea">
         <div class="input-wrap">
           <textarea id="messageInput" rows="1" placeholder="Örn: Log gruplarımı listele..." autofocus></textarea>
           <button id="sendBtn" type="button">Gönder</button>
@@ -523,6 +880,10 @@
 
   <script>
     const STORAGE_KEY = "cloudwatch-agent-chats-v1";
+    const MAX_HISTORY_FOR_API = 6;
+    const MAX_HISTORY_CHARS = 2500;
+    const MAX_STORAGE_CHARS = 12000;
+    const LIST_PREVIEW_LINES = 60;
     const messagesEl = document.getElementById("messages");
     const welcomeEl = document.getElementById("welcome");
     const inputEl = document.getElementById("messageInput");
@@ -539,10 +900,52 @@
     const closeChatBtn = document.getElementById("closeChatBtn");
     const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
     const layoutEl = document.getElementById("layout");
+    const tabChat = document.getElementById("tabChat");
+    const tabDashboard = document.getElementById("tabDashboard");
+    const chatSubtitle = document.getElementById("chatSubtitle");
+    const dashboardPanel = document.getElementById("dashboardPanel");
+    const inputArea = document.getElementById("inputArea");
+    const dashboardHours = document.getElementById("dashboardHours");
+    const dashboardRefreshBtn = document.getElementById("dashboardRefreshBtn");
+    const dashboardStatus = document.getElementById("dashboardStatus");
+    const alarmCountEl = document.getElementById("alarmCount");
+    const alarmSubEl = document.getElementById("alarmSub");
+    const alarmListEl = document.getElementById("alarmList");
+    const errorTotalEl = document.getElementById("errorTotal");
+    const errorSubEl = document.getElementById("errorSub");
+    const errorGroupFilter = document.getElementById("errorGroupFilter");
+    const errorSearchInput = document.getElementById("errorSearchInput");
+    const errorTableStatus = document.getElementById("errorTableStatus");
+    const errorTableBody = document.getElementById("errorTableBody");
+    const errorDetailModal = document.getElementById("errorDetailModal");
+    const errorDetailMeta = document.getElementById("errorDetailMeta");
+    const errorDetailBody = document.getElementById("errorDetailBody");
+    const errorDetailClose = document.getElementById("errorDetailClose");
+
+    let timelineChart = null;
+    let byGroupChart = null;
+    let dashboardTimer = null;
+    let activeView = "chat";
+    let errorDetailsCache = [];
+    let lastDashboardGroups = [];
 
     let chats = [];
     let currentChatId = null;
-    let loading = false;
+    const loadingChats = new Set();
+
+    function isChatLoading(chatId) {
+      return chatId ? loadingChats.has(chatId) : false;
+    }
+
+    function updateInputState() {
+      const chat = getCurrentChat();
+      sendBtn.disabled = !chat || isChatLoading(chat?.id);
+      inputEl.disabled = !chat;
+    }
+
+    function getChatById(chatId) {
+      return chats.find(c => c.id === chatId) || null;
+    }
 
     function createChat(title = "Yeni Sohbet") {
       const chat = {
@@ -563,8 +966,75 @@
       return chats.find(c => c.id === currentChatId) || null;
     }
 
+    function isLargeLogGroupList(content) {
+      return /^\*\*\d+\s+log grubu\*\*/m.test(content || "")
+        || /^\*\*\d+\s+aktif alarm\*\*/m.test(content || "");
+    }
+
+    function isLargeAssistantMessage(content) {
+      const text = content || "";
+      return text.length > 8000 || (text.match(/^\d+\.\s+`/gm) || []).length > LIST_PREVIEW_LINES;
+    }
+
+    function compactMessageContent(content, maxChars) {
+      const text = String(content || "");
+      if (text.length <= maxChars) return text;
+      if (isLargeLogGroupList(text)) {
+        const count = text.match(/\*\*(\d+)\s+log grubu\*\*/)?.[1]
+          || text.match(/\*\*(\d+)\s+aktif alarm\*\*/)?.[1]
+          || "?";
+        return `[${count} kayıt listelendi — tam liste yalnızca o yanıtta gösterildi]`;
+      }
+      return text.slice(0, maxChars) + `\n...[${text.length - maxChars} karakter kısaltıldı]`;
+    }
+
+    function historySummary(content) {
+      const text = String(content || "");
+      const logMatch = text.match(/^\*\*(\d+)\s+log grubu\*\*/m);
+      if (logMatch) {
+        return `[Önceki: ${logMatch[1]} log grubu listelendi — tekrar görmek için "log gruplarını göster" de.]`;
+      }
+      const alarmMatch = text.match(/^\*\*(\d+)\s+aktif alarm\*\*/m);
+      if (alarmMatch) {
+        return `[Önceki: ${alarmMatch[1]} aktif alarm listelendi.]`;
+      }
+      if (text.length > 1200 && /(log grubunda|hata|error|5\d{2}|400|kayıt bulunamadı|satır)/i.test(text)) {
+        return "[Önceki: log içeriği/hata araması yapıldı ve özetlendi.]";
+      }
+      const searchMatch = text.match(/^\*\*Son \d+ saat — (\d+) eşleşen satır\*\*/m);
+      if (searchMatch) {
+        return `[Önceki: ${searchMatch[1]} log satırı arandı, gerçek log group isimleriyle listelendi.]`;
+      }
+      return compactMessageContent(text, MAX_HISTORY_CHARS);
+    }
+
+    function buildHistoryPayload(history) {
+      const eligible = (history || [])
+        .filter(m => m.role === "user" || m.role === "assistant")
+        .slice(0, -1)
+        .slice(-MAX_HISTORY_FOR_API);
+      return eligible.map(m => ({
+        role: m.role,
+        content: m.role === "assistant" ? historySummary(m.content) : compactMessageContent(m.content, MAX_HISTORY_CHARS),
+      }));
+    }
+
     function persistChats() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ chats, currentChatId }));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ chats, currentChatId }));
+      } catch {
+        chats.forEach(chat => {
+          chat.history = chat.history.map(entry => ({
+            ...entry,
+            content: compactMessageContent(entry.content, MAX_STORAGE_CHARS),
+          }));
+        });
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ chats, currentChatId }));
+        } catch {
+          // localStorage doluysa UI çalışmaya devam etsin
+        }
+      }
     }
 
     function loadChats() {
@@ -594,28 +1064,36 @@
       }
       chatListEl.innerHTML = chats.map(chat => {
         const active = chat.id === currentChatId;
+        const busy = isChatLoading(chat.id);
+        const title = escapeHtml(chat.title || "Yeni Sohbet");
+        const busyLabel = busy ? " <span style='color:var(--accent)'>…</span>" : "";
         return `
           <button data-chat-id="${chat.id}" class="chat-item" style="
             width:100%;text-align:left;background:${active ? "rgba(255,153,0,.18)" : "transparent"};
             color:${active ? "var(--text)" : "var(--muted)"};border:1px solid ${active ? "var(--accent)" : "transparent"};
             border-radius:6px;padding:.45rem .5rem;margin-bottom:.25rem;cursor:pointer;font-family:inherit;font-size:.75rem;
+            ${busy ? "opacity:.85;" : ""}
           ">
-            ${escapeHtml(chat.title || "Yeni Sohbet")}
+            ${title}${busyLabel}
           </button>
         `;
       }).join("");
 
       chatListEl.querySelectorAll(".chat-item").forEach(btn => {
         btn.addEventListener("click", () => {
+          if (btn.dataset.chatId === currentChatId) return;
           currentChatId = btn.dataset.chatId;
           persistChats();
           renderChatList();
           renderCurrentChat();
+          updateInputState();
+          inputEl.focus();
         });
       });
     }
 
     function renderCurrentChat() {
+      hideTyping();
       messagesEl.innerHTML = "";
       const chat = getCurrentChat();
       if (!chat || !chat.history.length) {
@@ -625,10 +1103,14 @@
             <p>CloudWatch log, metric ve alarm sorularını sorabilirsin. Agent LLM ile tool seçip AWS'den veri çeker.</p>
           </div>`;
       } else {
-        chat.history.forEach(msg => addMessage(msg.role, msg.content, msg.extras || {}, false));
+        chat.history.forEach(msg => addMessage(msg.role, msg.content, msg.extras || {}, false, chat.id));
       }
       chatTitleEl.textContent = chat?.title || "Observability Chat";
+      if (chat && isChatLoading(chat.id)) {
+        showTyping();
+      }
       messagesEl.scrollTop = messagesEl.scrollHeight;
+      updateInputState();
     }
 
     function renderToolsTooltip(tools = []) {
@@ -656,6 +1138,7 @@
     async function checkReady() {
       try {
         const res = await fetch("/ready");
+        if (!res.ok) throw new Error(`ready ${res.status}`);
         const data = await res.json();
         statusDot.className = "status-dot ok";
         statusText.textContent = `${data.tools_loaded} tool hazır`;
@@ -663,16 +1146,48 @@
           ? data.tools
           : (data.allowed_tools || []).map(name => ({ name, description: "" }));
         renderToolsTooltip(catalog);
+        const vllm = data.vllm_base_url || "";
         metaInfo.innerHTML = `
-          <strong>Model:</strong> ${data.model}<br>
-          <strong>Region:</strong> ${data.aws_region}<br>
-          <strong>vLLM:</strong> ${data.vllm_base_url.replace("http://", "")}
+          <strong>Model:</strong> ${escapeHtml(data.model || "-")}<br>
+          <strong>Region:</strong> ${escapeHtml(data.aws_region || "-")}<br>
+          <strong>vLLM:</strong> ${escapeHtml(vllm.replace("http://", ""))}
         `;
       } catch {
         statusDot.className = "status-dot err";
         statusText.textContent = "Bağlantı hatası";
         renderToolsTooltip([]);
       }
+    }
+
+    function formatAssistantContent(text) {
+      const raw = String(text || "");
+      const lines = raw.split("\n");
+      const firstListIdx = lines.findIndex(line => /^\d+\.\s+`/.test(line));
+      if (firstListIdx === -1) {
+        return escapeHtml(raw).replace(/\n/g, "<br>");
+      }
+
+      const headerLines = lines.slice(0, firstListIdx);
+      const listLines = lines.slice(firstListIdx);
+      const headerHtml = headerLines.length
+        ? escapeHtml(headerLines.join("\n")).replace(/\n/g, "<br>") + "<br><br>"
+        : "";
+
+      if (listLines.length <= LIST_PREVIEW_LINES) {
+        return headerHtml + `<div class="list-body">${listLines.map(l => escapeHtml(l)).join("<br>")}</div>`;
+      }
+
+      const listId = "list-" + crypto.randomUUID().slice(0, 8);
+      const preview = listLines.slice(0, LIST_PREVIEW_LINES);
+      const hidden = listLines.slice(LIST_PREVIEW_LINES);
+      return `
+        ${headerHtml}
+        <div class="list-body" id="${listId}-visible">${preview.map(l => escapeHtml(l)).join("<br>")}</div>
+        <div class="list-body" id="${listId}-hidden" style="display:none">${hidden.map(l => escapeHtml(l)).join("<br>")}</div>
+        <button type="button" class="expand-list-btn" id="${listId}-btn"
+          onclick="document.getElementById('${listId}-hidden').style.display='block';this.remove();">
+          + ${hidden.length} satır daha göster
+        </button>`;
     }
 
     function formatResponse(text) {
@@ -693,7 +1208,7 @@
         }
         return `<pre>${JSON.stringify(parsed, null, 2)}</pre>`;
       } catch {
-        return escapeHtml(text).replace(/\n/g, "<br>");
+        return formatAssistantContent(text);
       }
     }
 
@@ -703,7 +1218,28 @@
       return d.innerHTML;
     }
 
-    function addMessage(role, content, extras = {}, save = true) {
+    function addMessage(role, content, extras = {}, save = true, targetChatId = null) {
+      const chatId = targetChatId || currentChatId;
+      const chat = getChatById(chatId);
+
+      if (save && chat) {
+        const storedContent = role === "assistant" && isLargeAssistantMessage(content) && !isLargeLogGroupList(content)
+          ? compactMessageContent(content, MAX_STORAGE_CHARS)
+          : content;
+        chat.history.push({ role, content: storedContent, extras });
+        if (role === "user" && chat.history.filter(m => m.role === "user").length === 1) {
+          chat.title = content.slice(0, 28) + (content.length > 28 ? "..." : "");
+        }
+        persistChats();
+        renderChatList();
+        if (chatId === currentChatId) {
+          chatTitleEl.textContent = chat.title;
+        }
+        return;
+      }
+
+      if (chatId !== currentChatId) return;
+
       document.getElementById("welcome")?.remove();
       const div = document.createElement("div");
       div.className = `msg ${role}`;
@@ -721,7 +1257,7 @@
             <div class="tools-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
               🔧 ${extras.tool_calls.length} tool çağrısı ▾
             </div>
-            <div>${items}</div>
+            <div style="display:none">${items}</div>
           </div>`;
       }
 
@@ -738,19 +1274,6 @@
         </div>`;
       messagesEl.appendChild(div);
       messagesEl.scrollTop = messagesEl.scrollHeight;
-
-      if (save) {
-        const chat = getCurrentChat();
-        if (chat) {
-          chat.history.push({ role, content, extras });
-          if (role === "user" && chat.history.length === 1) {
-            chat.title = content.slice(0, 28) + (content.length > 28 ? "..." : "");
-          }
-          persistChats();
-          renderChatList();
-          chatTitleEl.textContent = chat.title;
-        }
-      }
     }
 
     function showTyping() {
@@ -767,46 +1290,100 @@
     }
 
     async function sendMessage(text) {
-      if (!text.trim() || loading) return;
-      loading = true;
-      sendBtn.disabled = true;
+      const trimmed = text.trim();
+      const chat = getCurrentChat();
+      if (!trimmed || !chat || isChatLoading(chat.id)) return;
+
+      const requestChatId = chat.id;
+      const requestHistory = buildHistoryPayload(chat.history || []);
+
+      loadingChats.add(requestChatId);
+      updateInputState();
+      renderChatList();
       const start = Date.now();
 
-      addMessage("user", text.trim());
-      inputEl.value = "";
-      inputEl.style.height = "auto";
-      showTyping();
+      addMessage("user", trimmed, {}, true, requestChatId);
+      if (requestChatId === currentChatId) {
+        inputEl.value = "";
+        inputEl.style.height = "auto";
+        renderCurrentChat();
+      }
+
+      let shouldRefreshVisibleChat = false;
 
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 180000);
+
         const res = await fetch("/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text.trim(), history: getCurrentChat()?.history?.filter(m => m.role === "user" || m.role === "assistant").map(m => ({ role: m.role, content: m.content })) || [] }),
+          body: JSON.stringify({
+            message: trimmed,
+            history: requestHistory,
+          }),
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
 
-        hideTyping();
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        const requestChat = getChatById(requestChatId);
+        if (!requestChat) return;
+
+        if (requestChatId === currentChatId) {
+          hideTyping();
+        }
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({ detail: res.statusText }));
-          addMessage("assistant", err.detail || "Bir hata oluştu", { error: true, elapsed });
+          addMessage(
+            "assistant",
+            err.detail || "Bir hata oluştu",
+            { error: true, elapsed },
+            true,
+            requestChatId
+          );
+          shouldRefreshVisibleChat = requestChatId === currentChatId;
           return;
         }
 
         const data = await res.json();
-        addMessage("assistant", data.response, {
-          tool_calls: data.tool_calls,
-          iterations: data.iterations,
-          elapsed,
-        });
-
+        addMessage(
+          "assistant",
+          data.response,
+          {
+            tool_calls: data.tool_calls,
+            iterations: data.iterations,
+            elapsed,
+          },
+          true,
+          requestChatId
+        );
+        shouldRefreshVisibleChat = requestChatId === currentChatId;
       } catch (err) {
-        hideTyping();
-        addMessage("assistant", err.message, { error: true });
+        if (getChatById(requestChatId)) {
+          if (requestChatId === currentChatId) {
+            hideTyping();
+          }
+          const msg = err.name === "AbortError"
+            ? "İstek zaman aşımına uğradı. Tekrar dene veya yeni sohbet başlat."
+            : (err.message === "Failed to fetch"
+              ? "Bağlantı koptu. Port-forward açık mı? Büyük liste sonrası **Yeni** sohbet deneyebilirsin."
+              : err.message);
+          addMessage("assistant", msg, { error: true }, true, requestChatId);
+          shouldRefreshVisibleChat = requestChatId === currentChatId;
+        }
       } finally {
-        loading = false;
-        sendBtn.disabled = false;
-        inputEl.focus();
+        loadingChats.delete(requestChatId);
+        renderChatList();
+        if (shouldRefreshVisibleChat) {
+          renderCurrentChat();
+        } else {
+          updateInputState();
+        }
+        if (currentChatId === requestChatId) {
+          inputEl.focus();
+        }
       }
     }
 
@@ -845,6 +1422,7 @@
     });
 
     closeChatBtn.addEventListener("click", () => {
+      const closingId = currentChatId;
       if (chats.length <= 1) {
         const chat = getCurrentChat();
         if (chat) chat.history = [];
@@ -852,7 +1430,8 @@
         renderCurrentChat();
         return;
       }
-      chats = chats.filter(c => c.id !== currentChatId);
+      chats = chats.filter(c => c.id !== closingId);
+      loadingChats.delete(closingId);
       currentChatId = chats[0]?.id || null;
       if (!currentChatId) createChat();
       persistChats();
@@ -867,6 +1446,264 @@
       layoutEl.style.gridTemplateColumns = isHidden ? "280px 1fr" : "1fr";
       toggleSidebarBtn.textContent = isHidden ? "Paneli Kapat" : "Paneli Aç";
     });
+
+    function setActiveView(view) {
+      activeView = view;
+      const isChat = view === "chat";
+      tabChat.classList.toggle("active", isChat);
+      tabDashboard.classList.toggle("active", !isChat);
+      messagesEl.classList.toggle("hidden", !isChat);
+      inputArea.classList.toggle("hidden", !isChat);
+      dashboardPanel.classList.toggle("active", !isChat);
+      chatTitleEl.textContent = isChat ? (getCurrentChat()?.title || "Observability Chat") : "Observability Dashboard";
+      chatSubtitle.textContent = isChat
+        ? "Doğal dilde sor, agent CloudWatch tool'larını çağırsın"
+        : "Canlı CloudWatch özeti — LLM olmadan doğrudan veri";
+      if (!isChat) {
+        loadDashboard();
+        if (dashboardTimer) clearInterval(dashboardTimer);
+        dashboardTimer = setInterval(() => {
+          loadDashboard();
+          loadErrorDetails();
+        }, 60000);
+      } else if (dashboardTimer) {
+        clearInterval(dashboardTimer);
+        dashboardTimer = null;
+      }
+    }
+
+    tabChat.addEventListener("click", () => setActiveView("chat"));
+    tabDashboard.addEventListener("click", () => setActiveView("dashboard"));
+    dashboardRefreshBtn.addEventListener("click", () => {
+      loadDashboard(true);
+      loadErrorDetails(true);
+    });
+    dashboardHours.addEventListener("change", () => {
+      loadDashboard(true);
+      loadErrorDetails(true);
+    });
+    errorGroupFilter.addEventListener("change", () => loadErrorDetails(true));
+    errorSearchInput.addEventListener("input", () => renderErrorTable());
+    errorDetailClose.addEventListener("click", () => errorDetailModal.classList.remove("open"));
+    errorDetailModal.addEventListener("click", (e) => {
+      if (e.target === errorDetailModal) errorDetailModal.classList.remove("open");
+    });
+
+    function destroyChart(chart) {
+      if (chart) chart.destroy();
+      return null;
+    }
+
+  function formatChartLabel(timestamp) {
+      if (!timestamp) return "";
+      const d = new Date(timestamp);
+      if (Number.isNaN(d.getTime())) return String(timestamp).slice(0, 16);
+      return d.toLocaleString("tr-TR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function shortLogGroup(name) {
+      const text = String(name || "");
+      if (text.length <= 42) return text;
+      const parts = text.split("/");
+      return "…/" + parts.slice(-2).join("/");
+    }
+
+    async function loadDashboard(force = false) {
+      const hours = dashboardHours.value || "24";
+      dashboardStatus.textContent = force ? "Yenileniyor..." : "Yükleniyor...";
+      try {
+        const res = await fetch(`/api/dashboard/overview?hours=${encodeURIComponent(hours)}`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || "Dashboard yüklenemedi");
+        }
+        const data = await res.json();
+        renderDashboard(data);
+        dashboardStatus.textContent = `Güncellendi: ${new Date(data.generated_at || Date.now()).toLocaleTimeString("tr-TR")} · ${data.log_groups_searched} log group tarandı`;
+        loadErrorDetails();
+      } catch (err) {
+        dashboardStatus.textContent = `Hata: ${err.message}`;
+      }
+    }
+
+    function populateErrorGroupFilter(groups) {
+      const selected = errorGroupFilter.value;
+      const options = ['<option value="">Tüm log group\'lar</option>'];
+      for (const g of groups) {
+        const name = typeof g === "string" ? g : g.log_group;
+        if (!name) continue;
+        options.push(`<option value="${escapeHtml(name)}">${escapeHtml(shortLogGroup(name))}</option>`);
+      }
+      errorGroupFilter.innerHTML = options.join("");
+      if (selected && groups.some(g => (typeof g === "string" ? g : g.log_group) === selected)) {
+        errorGroupFilter.value = selected;
+      }
+    }
+
+    async function loadErrorDetails(force = false) {
+      const hours = dashboardHours.value || "24";
+      const logGroup = errorGroupFilter.value || "";
+      errorTableStatus.textContent = force ? "Yenileniyor..." : "Yükleniyor...";
+      try {
+        const params = new URLSearchParams({ hours, limit: "150" });
+        if (logGroup) params.set("log_group", logGroup);
+        const res = await fetch(`/api/dashboard/errors?${params}`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || "Hata detayları yüklenemedi");
+        }
+        const data = await res.json();
+        errorDetailsCache = data.items || [];
+        errorTableStatus.textContent = `${data.count} kayıt · son ${data.hours} saat`;
+        renderErrorTable();
+      } catch (err) {
+        errorTableStatus.textContent = `Hata: ${err.message}`;
+        errorTableBody.innerHTML = `<tr><td colspan="3" style="color:var(--error)">${escapeHtml(err.message)}</td></tr>`;
+      }
+    }
+
+    function formatErrorTime(timestamp) {
+      if (!timestamp) return "—";
+      const d = new Date(timestamp);
+      if (Number.isNaN(d.getTime())) return String(timestamp).slice(0, 19);
+      return d.toLocaleString("tr-TR", {
+        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
+      });
+    }
+
+    function truncateMessage(message, max = 180) {
+      const text = String(message || "");
+      return text.length > max ? text.slice(0, max) + "…" : text;
+    }
+
+    function renderErrorTable() {
+      const query = (errorSearchInput.value || "").trim().toLowerCase();
+      const rows = errorDetailsCache.filter((row) => {
+        if (!query) return true;
+        const haystack = `${row.log_group || ""} ${row.message || ""}`.toLowerCase();
+        return haystack.includes(query);
+      });
+
+      if (!rows.length) {
+        errorTableBody.innerHTML = `<tr><td colspan="3" style="color:var(--muted)">Kayıt bulunamadı</td></tr>`;
+        return;
+      }
+
+      errorTableBody.innerHTML = rows.map((row, idx) => `
+        <tr data-idx="${idx}">
+          <td class="col-time">${escapeHtml(formatErrorTime(row.timestamp))}</td>
+          <td class="col-group" title="${escapeHtml(row.log_group || "")}">${escapeHtml(shortLogGroup(row.log_group || ""))}</td>
+          <td class="col-message">${escapeHtml(truncateMessage(row.message))}</td>
+        </tr>
+      `).join("");
+
+      errorTableBody.querySelectorAll("tr[data-idx]").forEach((tr) => {
+        tr.addEventListener("click", () => {
+          const row = rows[Number(tr.dataset.idx)];
+          if (!row) return;
+          errorDetailMeta.innerHTML = `
+            <strong>Zaman:</strong> ${escapeHtml(formatErrorTime(row.timestamp))}<br>
+            <strong>Log group:</strong> ${escapeHtml(row.log_group || "—")}
+          `;
+          errorDetailBody.textContent = row.message || "";
+          errorDetailModal.classList.add("open");
+        });
+      });
+    }
+
+    function setErrorGroupFilter(logGroup) {
+      if (!logGroup) return;
+      const exists = Array.from(errorGroupFilter.options).some(o => o.value === logGroup);
+      if (!exists) {
+        const opt = document.createElement("option");
+        opt.value = logGroup;
+        opt.textContent = shortLogGroup(logGroup);
+        errorGroupFilter.appendChild(opt);
+      }
+      errorGroupFilter.value = logGroup;
+      loadErrorDetails(true);
+      document.getElementById("errorTableWidget")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function renderDashboard(data) {
+      const alarms = data.active_alarms || {};
+      alarmCountEl.textContent = alarms.count ?? 0;
+      alarmSubEl.textContent = `${data.region || ""} · ALARM durumundaki alarm sayısı`;
+      const items = alarms.items || [];
+      alarmListEl.innerHTML = items.length
+        ? items.map(a => `<div>${escapeHtml(a.name)}${a.metric ? ` <span style="color:var(--muted)">(${escapeHtml(a.metric)})</span>` : ""}</div>`).join("")
+        : `<div style="color:var(--muted)">Aktif alarm yok</div>`;
+
+      const totalErrors = data.summary?.total_errors ?? 0;
+      errorTotalEl.textContent = totalErrors;
+      const top = data.summary?.top_log_group;
+      errorSubEl.textContent = top
+        ? `En çok: ${shortLogGroup(top)}`
+        : `Son ${data.hours} saat`;
+
+      const timeline = data.errors_timeline || [];
+      const timelineLabels = timeline.map(p => formatChartLabel(p.timestamp));
+      const timelineCounts = timeline.map(p => p.count);
+
+      timelineChart = destroyChart(timelineChart);
+      timelineChart = new Chart(document.getElementById("timelineChart"), {
+        type: "line",
+        data: {
+          labels: timelineLabels,
+          datasets: [{
+            label: "Hata sayısı",
+            data: timelineCounts,
+            borderColor: "#ff9900",
+            backgroundColor: "rgba(255,153,0,.15)",
+            fill: true,
+            tension: 0.25,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: "#8b9cb3" } } },
+          scales: {
+            x: { ticks: { color: "#8b9cb3", maxRotation: 45 }, grid: { color: "rgba(42,53,68,.6)" } },
+            y: { beginAtZero: true, ticks: { color: "#8b9cb3", precision: 0 }, grid: { color: "rgba(42,53,68,.6)" } },
+          },
+        },
+      });
+
+      const groups = data.errors_by_log_group || [];
+      lastDashboardGroups = groups;
+      populateErrorGroupFilter(groups);
+      byGroupChart = destroyChart(byGroupChart);
+      byGroupChart = new Chart(document.getElementById("byGroupChart"), {
+        type: "bar",
+        data: {
+          labels: groups.map(g => shortLogGroup(g.log_group)),
+          datasets: [{
+            label: "Hata",
+            data: groups.map(g => g.count),
+            backgroundColor: "rgba(255,153,0,.55)",
+            borderColor: "#ff9900",
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          indexAxis: "y",
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          onClick: (_evt, elements) => {
+            if (!elements.length) return;
+            const idx = elements[0].index;
+            const group = groups[idx]?.log_group;
+            if (group) setErrorGroupFilter(group);
+          },
+          scales: {
+            x: { beginAtZero: true, ticks: { color: "#8b9cb3", precision: 0 }, grid: { color: "rgba(42,53,68,.6)" } },
+            y: { ticks: { color: "#8b9cb3" }, grid: { color: "rgba(42,53,68,.3)" } },
+          },
+        },
+      });
+    }
 
     checkReady();
     loadChats();
