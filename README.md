@@ -28,11 +28,6 @@ kubectl get pods -n mcp-llm-agent
 kubectl get svc -n mcp-llm-agent
 ```
 
-Pod hazır olunca:
-
-```bash
-kubectl wait --for=condition=ready pod -l app=cloudwatch-agent -n mcp-llm-agent --timeout=120s
-```
 
 ## UI'ye erişim (port-forward)
 
@@ -59,7 +54,7 @@ fg   # arka plana aldıysan önce öne getir
 # Ctrl+C
 ```
 
-### Sağlık kontrolleri
+### HealthCheck kontrolleri
 
 Port-forward aktifken:
 
@@ -110,6 +105,7 @@ curl -s http://localhost:8080/chat \
 ```
 
 ## CloudWatch tool'ları
+mouse ile üzerine geline tool listesi ui'da gözüküyor
 
 - `describe_log_groups` — log group listeleme / arama
 - `analyze_log_group` — log group analizi
@@ -123,7 +119,7 @@ curl -s http://localhost:8080/chat \
 - `get_recommended_metric_alarms` — önerilen alarmlar
 - `analyze_metric` — metric analizi
 
-## Ortam değişkenleri
+## env
 
 | Değişken | Açıklama | Örnek |
 |----------|----------|-------|
@@ -138,16 +134,3 @@ curl -s http://localhost:8080/chat \
 | `LLM_MAX_TOKENS` | LLM max token | `700` |
 | `LLM_TEMPERATURE` | LLM temperature | `0.1` |
 | `LOG_LEVEL` | Log seviyesi | `INFO` |
-
-Tam liste: `.env.example`
-
-## IRSA
-
-`k8s/deployment.yaml` içindeki ServiceAccount annotation'ına CloudWatch read yetkisi olan IAM role ARN yazılmalı. Örnek trust policy: `trust-policy.json`
-
-## Rollout (image güncelleme sonrası)
-
-```bash
-kubectl rollout restart deployment/cloudwatch-agent -n mcp-llm-agent
-kubectl rollout status deployment/cloudwatch-agent -n mcp-llm-agent
-```
