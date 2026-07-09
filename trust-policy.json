@@ -1,0 +1,23 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::212845026981:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/95AEF80DD74C412608532A5FE9679441"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "oidc.eks.eu-central-1.amazonaws.com/id/95AEF80DD74C412608532A5FE9679441:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "oidc.eks.eu-central-1.amazonaws.com/id/95AEF80DD74C412608532A5FE9679441:sub": [
+            "system:serviceaccount:llm-mcp:cloudwatch-mcp-sa",
+            "system:serviceaccount:mcp-llm-agent:cloudwatch-agent"
+          ]
+        }
+      }
+    }
+  ]
+}

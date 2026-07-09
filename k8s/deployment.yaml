@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-llm-agent
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudwatch-agent
+  namespace: mcp-llm-agent
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::212845026981:role/cloudwatch-mcp-role
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudwatch-agent
+  namespace: mcp-llm-agent
+  labels:
+    app: cloudwatch-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudwatch-agent
+  template:
+    metadata:
+      labels:
+        app: cloudwatch-agent
+    spec:
+      serviceAccountName: cloudwatch-agent
+      containers:
+        - name: cloudwatch-agent
+          image: 212845026981.dkr.ecr.eu-central-1.amazonaws.com/mcp-llm-cloudwatch:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: VLLM_BASE_URL
+              value: http://vllm-gptoss.llm-model.svc.cluster.local:8080/v1
+            - name: MODEL_NAME
+              value: openai/gpt-oss-20b
+            - name: AWS_REGION
+              value: eu-central-1
+            - name: LOG_LEVEL
+              value: INFO
+            - name: MAX_TOOL_ITERATIONS
+              value: "10"
+            - name: MAX_HISTORY_MESSAGES
+              value: "6"
+            - name: MAX_HISTORY_MESSAGE_CHARS
+              value: "2500"
+            - name: MAX_TOOL_RESULT_CHARS
+              value: "8000"
+            - name: LLM_MAX_TOKENS
+              value: "700"
+            - name: LLM_TEMPERATURE
+              value: "0.1"
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudwatch-agent
+  namespace: mcp-llm-agent
+  labels:
+    app: cloudwatch-agent
+spec:
+  type: ClusterIP
+  selector:
+    app: cloudwatch-agent
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

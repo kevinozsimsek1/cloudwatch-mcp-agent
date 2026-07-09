@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CloudWatch Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0c1117;
+      --surface: #151b23;
+      --surface-2: #1c2430;
+      --border: #2a3544;
+      --text: #e8edf4;
+      --muted: #8b9cb3;
+      --accent: #ff9900;
+      --accent-dim: #cc7a00;
+      --user: #1a3a5c;
+      --assistant: #1a2420;
+      --tool: #2a1f3d;
+      --success: #3dd68c;
+      --error: #f87171;
+      --radius: 12px;
+      --shadow: 0 8px 32px rgba(0,0,0,.4);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "IBM Plex Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(255,153,0,.12), transparent),
+        radial-gradient(ellipse 60% 40% at 100% 100%, rgba(26,58,92,.3), transparent);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      width: 100%;
+      max-width: 1400px;
+      margin: 0 auto;
+      min-height: 100vh;
+    }
+
+    @media (max-width: 768px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--border);
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      background: rgba(21,27,35,.6);
+      backdrop-filter: blur(8px);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+    }
+
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      font-size: 1.25rem;
+    }
+
+    .logo h1 {
+      font-size: 1rem;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .logo span {
+      font-size: .75rem;
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      font-size: .8rem;
+      color: var(--muted);
+      padding: .6rem .8rem;
+      background: var(--surface-2);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .status-label-wrap {
+      position: relative;
+      cursor: help;
+      border-bottom: 1px dotted var(--border);
+    }
+
+    .tools-tooltip {
+      display: none;
+      position: absolute;
+      left: 0;
+      top: calc(100% + 8px);
+      z-index: 50;
+      width: 300px;
+      max-height: 320px;
+      overflow-y: auto;
+      padding: .75rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      font-size: .72rem;
+      line-height: 1.4;
+      color: var(--text);
+    }
+
+    .status-label-wrap:hover .tools-tooltip,
+    .status-label-wrap:focus-within .tools-tooltip {
+      display: block;
+    }
+
+    .tools-tooltip-title {
+      font-size: .65rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: .5rem;
+    }
+
+    .tools-tooltip-item {
+      padding: .45rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tools-tooltip-item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .tools-tooltip-item strong {
+      display: block;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .68rem;
+      color: var(--accent);
+      font-weight: 500;
+      margin-bottom: .15rem;
+    }
+
+    .tools-tooltip-item span {
+      color: var(--muted);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.ok { background: var(--success); }
+    .status-dot.err { background: var(--error); animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .4; }
+    }
+
+    .meta {
+      font-size: .75rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .meta strong { color: var(--text); }
+
+    .prompts h3 {
+      font-size: .7rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: .6rem;
+    }
+
+    .prompt-btn {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: .65rem .8rem;
+      margin-bottom: .4rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: .8rem;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      font-family: inherit;
+    }
+
+    .prompt-btn:hover {
+      border-color: var(--accent);
+      background: rgba(255,153,0,.08);
+    }
+
+    .main {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .chat-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(21,27,35,.5);
+      backdrop-filter: blur(8px);
+    }
+
+    .chat-header h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    .chat-header p {
+      font-size: .8rem;
+      color: var(--muted);
+      margin-top: .2rem;
+    }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .msg {
+      max-width: 85%;
+      animation: fadeIn .3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .msg.user { align-self: flex-end; }
+    .msg.assistant { align-self: flex-start; }
+
+    .msg-label {
+      font-size: .7rem;
+      color: var(--muted);
+      margin-bottom: .35rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+
+    .msg.user .msg-label { text-align: right; }
+
+    .bubble {
+      padding: .9rem 1.1rem;
+      border-radius: var(--radius);
+      line-height: 1.55;
+      font-size: .9rem;
+      border: 1px solid var(--border);
+    }
+
+    .msg.user .bubble {
+      background: var(--user);
+      border-color: #2a5080;
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.assistant .bubble {
+      background: var(--assistant);
+      border-color: #2a4035;
+      border-bottom-left-radius: 4px;
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+
+    .bubble pre {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .78rem;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin-top: .5rem;
+      padding: .75rem;
+      background: rgba(0,0,0,.3);
+      border-radius: 8px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .tools-section {
+      margin-top: .75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--tool);
+    }
+
+    .tools-header {
+      padding: .5rem .75rem;
+      font-size: .75rem;
+      color: var(--accent);
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      user-select: none;
+    }
+
+    .tools-header:hover { background: rgba(255,153,0,.06); }
+
+    .tool-item {
+      padding: .6rem .75rem;
+      border-top: 1px solid var(--border);
+      font-size: .75rem;
+    }
+
+    .tool-name {
+      font-family: "IBM Plex Mono", monospace;
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    .tool-args {
+      color: var(--muted);
+      margin-top: .25rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .7rem;
+    }
+
+    .meta-tag {
+      display: inline-block;
+      font-size: .7rem;
+      color: var(--muted);
+      margin-top: .5rem;
+      padding: .2rem .5rem;
+      background: var(--surface-2);
+      border-radius: 4px;
+    }
+
+    .welcome {
+      text-align: center;
+      padding: 3rem 2rem;
+      color: var(--muted);
+    }
+
+    .welcome h3 {
+      font-size: 1.25rem;
+      color: var(--text);
+      margin-bottom: .5rem;
+    }
+
+    .welcome p { font-size: .9rem; max-width: 400px; margin: 0 auto; }
+
+    .typing {
+      display: flex;
+      gap: 4px;
+      padding: .9rem 1.1rem;
+      align-self: flex-start;
+    }
+
+    .typing span {
+      width: 8px;
+      height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      animation: bounce .6s infinite alternate;
+    }
+
+    .typing span:nth-child(2) { animation-delay: .15s; }
+    .typing span:nth-child(3) { animation-delay: .3s; }
+
+    @keyframes bounce {
+      to { transform: translateY(-6px); opacity: .5; }
+    }
+
+    .input-area {
+      padding: 1rem 1.5rem 1.5rem;
+      border-top: 1px solid var(--border);
+      background: rgba(21,27,35,.8);
+      backdrop-filter: blur(8px);
+    }
+
+    .input-wrap {
+      display: flex;
+      gap: .75rem;
+      align-items: flex-end;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: .75rem 1rem;
+      transition: border-color .15s;
+    }
+
+    .input-wrap:focus-within { border-color: var(--accent); }
+
+    #messageInput {
+      flex: 1;
+      background: none;
+      border: none;
+      color: var(--text);
+      font-family: inherit;
+      font-size: .95rem;
+      resize: none;
+      min-height: 24px;
+      max-height: 120px;
+      outline: none;
+    }
+
+    #messageInput::placeholder { color: var(--muted); }
+
+    #sendBtn {
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      border: none;
+      color: #111;
+      font-weight: 600;
+      padding: .6rem 1.2rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: .85rem;
+      transition: transform .1s, opacity .15s;
+      white-space: nowrap;
+    }
+
+    #sendBtn:hover:not(:disabled) { transform: scale(1.02); }
+    #sendBtn:disabled { opacity: .5; cursor: not-allowed; }
+
+    .error-bubble {
+      background: rgba(248,113,113,.1);
+      border-color: var(--error);
+      color: var(--error);
+    }
+  </style>
+</head>
+<body>
+  <div class="layout" id="layout">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo-icon">☁</div>
+        <div>
+          <h1>CloudWatch Agent</h1>
+          <span>MCP + gpt-oss-20b</span>
+        </div>
+      </div>
+
+      <div class="status" id="statusBar">
+        <div class="status-dot" id="statusDot"></div>
+        <span class="status-label-wrap" id="statusLabelWrap" tabindex="0">
+          <span id="statusText">Bağlanıyor...</span>
+          <div class="tools-tooltip" id="toolsTooltip" role="tooltip"></div>
+        </span>
+      </div>
+
+      <div class="meta" id="metaInfo"></div>
+
+      <div>
+        <h3 style="font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:.6rem;">Sohbetler</h3>
+        <div style="display:flex;gap:.4rem;margin-bottom:.6rem;">
+          <button class="prompt-btn" id="newChatBtn" style="margin-bottom:0;padding:.5rem .6rem;font-size:.75rem;">+ Yeni</button>
+          <button class="prompt-btn" id="clearChatBtn" style="margin-bottom:0;padding:.5rem .6rem;font-size:.75rem;">Sıfırla</button>
+          <button class="prompt-btn" id="closeChatBtn" style="margin-bottom:0;padding:.5rem .6rem;font-size:.75rem;">Kapat</button>
+        </div>
+        <div id="chatList" style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:.4rem;background:var(--surface-2);"></div>
+      </div>
+
+      <div class="prompts">
+        <h3>Örnek sorular</h3>
+        <button class="prompt-btn" data-prompt="Log gruplarımı listele">Log gruplarımı listele</button>
+        <button class="prompt-btn" data-prompt="Aktif CloudWatch alarmları var mı?">Aktif alarmlar</button>
+        <button class="prompt-btn" data-prompt="/aws/apigateway/era-api-gateway-dev/access-logs log grubunda son 1 saatte error var mı?">API Gateway error analizi</button>
+        <button class="prompt-btn" data-prompt="ECS CPU metriklerini analiz et">Metric analizi</button>
+        <button class="prompt-btn" data-prompt="Son 24 saatte hangi alarmlar tetiklendi?">Alarm geçmişi</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="chat-header" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+        <div>
+          <h2 id="chatTitle">Observability Chat</h2>
+          <p>Doğal dilde sor, agent CloudWatch tool'larını çağırsın</p>
+        </div>
+        <button class="prompt-btn" id="toggleSidebarBtn" style="width:auto;margin:0;padding:.5rem .7rem;font-size:.75rem;">Paneli Kapat</button>
+      </header>
+
+      <div class="messages" id="messages">
+        <div class="welcome" id="welcome">
+          <h3>Merhaba 👋</h3>
+          <p>CloudWatch log, metric ve alarm sorularını sorabilirsin. Agent LLM ile tool seçip AWS'den veri çeker.</p>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <div class="input-wrap">
+          <textarea id="messageInput" rows="1" placeholder="Örn: Log gruplarımı listele..." autofocus></textarea>
+          <button id="sendBtn" type="button">Gönder</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "cloudwatch-agent-chats-v1";
+    const messagesEl = document.getElementById("messages");
+    const welcomeEl = document.getElementById("welcome");
+    const inputEl = document.getElementById("messageInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const statusLabelWrap = document.getElementById("statusLabelWrap");
+    const toolsTooltip = document.getElementById("toolsTooltip");
+    const metaInfo = document.getElementById("metaInfo");
+    const chatListEl = document.getElementById("chatList");
+    const chatTitleEl = document.getElementById("chatTitle");
+    const newChatBtn = document.getElementById("newChatBtn");
+    const clearChatBtn = document.getElementById("clearChatBtn");
+    const closeChatBtn = document.getElementById("closeChatBtn");
+    const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
+    const layoutEl = document.getElementById("layout");
+
+    let chats = [];
+    let currentChatId = null;
+    let loading = false;
+
+    function createChat(title = "Yeni Sohbet") {
+      const chat = {
+        id: crypto.randomUUID(),
+        title,
+        history: [],
+        createdAt: Date.now(),
+      };
+      chats.unshift(chat);
+      currentChatId = chat.id;
+      persistChats();
+      renderChatList();
+      renderCurrentChat();
+      return chat;
+    }
+
+    function getCurrentChat() {
+      return chats.find(c => c.id === currentChatId) || null;
+    }
+
+    function persistChats() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ chats, currentChatId }));
+    }
+
+    function loadChats() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+          createChat();
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        chats = Array.isArray(parsed.chats) ? parsed.chats : [];
+        currentChatId = parsed.currentChatId || null;
+        if (!chats.length) createChat();
+        if (!getCurrentChat()) currentChatId = chats[0].id;
+      } catch {
+        chats = [];
+        createChat();
+      }
+      renderChatList();
+      renderCurrentChat();
+    }
+
+    function renderChatList() {
+      if (!chats.length) {
+        chatListEl.innerHTML = `<div style="color:var(--muted);font-size:.75rem;padding:.4rem;">Sohbet yok</div>`;
+        return;
+      }
+      chatListEl.innerHTML = chats.map(chat => {
+        const active = chat.id === currentChatId;
+        return `
+          <button data-chat-id="${chat.id}" class="chat-item" style="
+            width:100%;text-align:left;background:${active ? "rgba(255,153,0,.18)" : "transparent"};
+            color:${active ? "var(--text)" : "var(--muted)"};border:1px solid ${active ? "var(--accent)" : "transparent"};
+            border-radius:6px;padding:.45rem .5rem;margin-bottom:.25rem;cursor:pointer;font-family:inherit;font-size:.75rem;
+          ">
+            ${escapeHtml(chat.title || "Yeni Sohbet")}
+          </button>
+        `;
+      }).join("");
+
+      chatListEl.querySelectorAll(".chat-item").forEach(btn => {
+        btn.addEventListener("click", () => {
+          currentChatId = btn.dataset.chatId;
+          persistChats();
+          renderChatList();
+          renderCurrentChat();
+        });
+      });
+    }
+
+    function renderCurrentChat() {
+      messagesEl.innerHTML = "";
+      const chat = getCurrentChat();
+      if (!chat || !chat.history.length) {
+        messagesEl.innerHTML = `
+          <div class="welcome" id="welcome">
+            <h3>Merhaba 👋</h3>
+            <p>CloudWatch log, metric ve alarm sorularını sorabilirsin. Agent LLM ile tool seçip AWS'den veri çeker.</p>
+          </div>`;
+      } else {
+        chat.history.forEach(msg => addMessage(msg.role, msg.content, msg.extras || {}, false));
+      }
+      chatTitleEl.textContent = chat?.title || "Observability Chat";
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function renderToolsTooltip(tools = []) {
+      if (!tools.length) {
+        toolsTooltip.innerHTML = "";
+        statusLabelWrap.style.cursor = "default";
+        statusLabelWrap.style.borderBottom = "none";
+        return;
+      }
+
+      statusLabelWrap.style.cursor = "help";
+      statusLabelWrap.style.borderBottom = "1px dotted var(--border)";
+      const items = tools.map(tool => `
+        <div class="tools-tooltip-item">
+          <strong>${escapeHtml(tool.name)}</strong>
+          <span>${escapeHtml(tool.description || "")}</span>
+        </div>
+      `).join("");
+      toolsTooltip.innerHTML = `
+        <div class="tools-tooltip-title">Kullanılabilir tool'lar</div>
+        ${items}
+      `;
+    }
+
+    async function checkReady() {
+      try {
+        const res = await fetch("/ready");
+        const data = await res.json();
+        statusDot.className = "status-dot ok";
+        statusText.textContent = `${data.tools_loaded} tool hazır`;
+        const catalog = data.tools?.length
+          ? data.tools
+          : (data.allowed_tools || []).map(name => ({ name, description: "" }));
+        renderToolsTooltip(catalog);
+        metaInfo.innerHTML = `
+          <strong>Model:</strong> ${data.model}<br>
+          <strong>Region:</strong> ${data.aws_region}<br>
+          <strong>vLLM:</strong> ${data.vllm_base_url.replace("http://", "")}
+        `;
+      } catch {
+        statusDot.className = "status-dot err";
+        statusText.textContent = "Bağlantı hatası";
+        renderToolsTooltip([]);
+      }
+    }
+
+    function formatResponse(text) {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed?.error) return escapeHtml(String(parsed.error)).replace(/\n/g, "<br>");
+        const groups = parsed?.log_groups || parsed?.logGroups;
+        if (Array.isArray(groups)) {
+          if (!groups.length) return "Eşleşen log group bulunamadı.";
+          const lines = groups.map(g => {
+            if (typeof g === "string") return `• ${escapeHtml(g)}`;
+            const name = g.logGroupName || JSON.stringify(g);
+            const retention = g.retentionInDays ? ` (${g.retentionInDays} gün)` : "";
+            return `• ${escapeHtml(name)}${retention}`;
+          });
+          const header = parsed.message ? `${escapeHtml(parsed.message)}<br><br>` : "";
+          return header + lines.join("<br>");
+        }
+        return `<pre>${JSON.stringify(parsed, null, 2)}</pre>`;
+      } catch {
+        return escapeHtml(text).replace(/\n/g, "<br>");
+      }
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function addMessage(role, content, extras = {}, save = true) {
+      document.getElementById("welcome")?.remove();
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+
+      let toolsHtml = "";
+      if (extras.tool_calls?.length) {
+        const items = extras.tool_calls.map(t => `
+          <div class="tool-item">
+            <div class="tool-name">${escapeHtml(t.name)}</div>
+            <div class="tool-args">${escapeHtml(JSON.stringify(t.arguments))}</div>
+          </div>
+        `).join("");
+        toolsHtml = `
+          <div class="tools-section">
+            <div class="tools-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
+              🔧 ${extras.tool_calls.length} tool çağrısı ▾
+            </div>
+            <div>${items}</div>
+          </div>`;
+      }
+
+      const metaTag = extras.elapsed
+        ? `<span class="meta-tag">${extras.elapsed}s</span>`
+        : "";
+
+      div.innerHTML = `
+        <div class="msg-label">${role === "user" ? "Sen" : "Agent"}</div>
+        <div class="bubble ${extras.error ? "error-bubble" : ""}">
+          ${role === "assistant" ? formatResponse(content) : escapeHtml(content)}
+          ${toolsHtml}
+          ${metaTag}
+        </div>`;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      if (save) {
+        const chat = getCurrentChat();
+        if (chat) {
+          chat.history.push({ role, content, extras });
+          if (role === "user" && chat.history.length === 1) {
+            chat.title = content.slice(0, 28) + (content.length > 28 ? "..." : "");
+          }
+          persistChats();
+          renderChatList();
+          chatTitleEl.textContent = chat.title;
+        }
+      }
+    }
+
+    function showTyping() {
+      const div = document.createElement("div");
+      div.className = "typing";
+      div.id = "typing";
+      div.innerHTML = "<span></span><span></span><span></span>";
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function hideTyping() {
+      document.getElementById("typing")?.remove();
+    }
+
+    async function sendMessage(text) {
+      if (!text.trim() || loading) return;
+      loading = true;
+      sendBtn.disabled = true;
+      const start = Date.now();
+
+      addMessage("user", text.trim());
+      inputEl.value = "";
+      inputEl.style.height = "auto";
+      showTyping();
+
+      try {
+        const res = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text.trim(), history: getCurrentChat()?.history?.filter(m => m.role === "user" || m.role === "assistant").map(m => ({ role: m.role, content: m.content })) || [] }),
+        });
+
+        hideTyping();
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          addMessage("assistant", err.detail || "Bir hata oluştu", { error: true, elapsed });
+          return;
+        }
+
+        const data = await res.json();
+        addMessage("assistant", data.response, {
+          tool_calls: data.tool_calls,
+          iterations: data.iterations,
+          elapsed,
+        });
+
+      } catch (err) {
+        hideTyping();
+        addMessage("assistant", err.message, { error: true });
+      } finally {
+        loading = false;
+        sendBtn.disabled = false;
+        inputEl.focus();
+      }
+    }
+
+    sendBtn.addEventListener("click", () => sendMessage(inputEl.value));
+
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage(inputEl.value);
+      }
+    });
+
+    inputEl.addEventListener("input", () => {
+      inputEl.style.height = "auto";
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+    });
+
+    document.querySelectorAll(".prompt-btn[data-prompt]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        inputEl.value = btn.dataset.prompt;
+        sendMessage(btn.dataset.prompt);
+      });
+    });
+
+    newChatBtn.addEventListener("click", () => {
+      createChat();
+      inputEl.focus();
+    });
+
+    clearChatBtn.addEventListener("click", () => {
+      const chat = getCurrentChat();
+      if (!chat) return;
+      chat.history = [];
+      persistChats();
+      renderCurrentChat();
+    });
+
+    closeChatBtn.addEventListener("click", () => {
+      if (chats.length <= 1) {
+        const chat = getCurrentChat();
+        if (chat) chat.history = [];
+        persistChats();
+        renderCurrentChat();
+        return;
+      }
+      chats = chats.filter(c => c.id !== currentChatId);
+      currentChatId = chats[0]?.id || null;
+      if (!currentChatId) createChat();
+      persistChats();
+      renderChatList();
+      renderCurrentChat();
+    });
+
+    toggleSidebarBtn.addEventListener("click", () => {
+      const sidebar = document.querySelector(".sidebar");
+      const isHidden = sidebar.style.display === "none";
+      sidebar.style.display = isHidden ? "flex" : "none";
+      layoutEl.style.gridTemplateColumns = isHidden ? "280px 1fr" : "1fr";
+      toggleSidebarBtn.textContent = isHidden ? "Paneli Kapat" : "Paneli Aç";
+    });
+
+    checkReady();
+    loadChats();
+    setInterval(checkReady, 30000);
+  </script>
+</body>
+</html>
