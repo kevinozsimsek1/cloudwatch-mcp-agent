@@ -77,8 +77,6 @@ uvicorn app.server:app --host 0.0.0.0 --port 8080 --reload
 
 Lokal çalışırken port-forward gerekmez; doğrudan http://localhost:8080 açılır.
 
-AWS kimlik bilgisi için ortamda geçerli credentials veya IRSA dışı bir profil gerekir.
-
 ## Docker image
 
 ```bash
