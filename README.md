@@ -47,12 +47,6 @@ Port-forward'u arka planda çalıştırmak istersen:
 kubectl port-forward -n mcp-llm-agent svc/cloudwatch-agent 8080:80 &
 ```
 
-Durdurmak için:
-
-```bash
-fg   # arka plana aldıysan önce öne getir
-# Ctrl+C
-```
 
 ### HealthCheck kontrolleri
 
