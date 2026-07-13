@@ -382,6 +382,218 @@
       border-radius: 4px;
     }
 
+    .md-code {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .82em;
+      padding: .1rem .35rem;
+      background: rgba(0,0,0,.25);
+      border-radius: 4px;
+      color: #f0c674;
+    }
+
+    .md-note {
+      display: block;
+      margin-top: .75rem;
+      padding: .65rem .8rem;
+      font-size: .8rem;
+      color: var(--muted);
+      background: rgba(255,153,0,.06);
+      border-left: 3px solid rgba(255,153,0,.45);
+      border-radius: 0 6px 6px 0;
+      line-height: 1.45;
+    }
+
+    .log-report {
+      display: flex;
+      flex-direction: column;
+      gap: .85rem;
+    }
+
+    .log-report-header {
+      padding: .85rem 1rem;
+      background: linear-gradient(135deg, rgba(255,153,0,.12), rgba(0,0,0,.2));
+      border: 1px solid rgba(255,153,0,.22);
+      border-radius: 10px;
+    }
+
+    .log-report-title {
+      font-weight: 600;
+      font-size: .95rem;
+      color: var(--text);
+      word-break: break-all;
+    }
+
+    .log-report-sub {
+      margin-top: .35rem;
+      font-size: .8rem;
+      color: var(--muted);
+    }
+
+    .log-report-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .4rem;
+      margin-top: .55rem;
+    }
+
+    .log-chip {
+      font-size: .72rem;
+      padding: .2rem .55rem;
+      border-radius: 999px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .log-chip strong { color: var(--text); font-weight: 600; }
+
+    .log-cards {
+      display: flex;
+      flex-direction: column;
+      gap: .65rem;
+    }
+
+    .log-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: rgba(0,0,0,.18);
+    }
+
+    .log-card-top {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: .45rem;
+      padding: .55rem .75rem;
+      background: rgba(0,0,0,.22);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .log-badge {
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: .03em;
+      padding: .18rem .5rem;
+      border-radius: 5px;
+      text-transform: uppercase;
+    }
+
+    .log-badge-err { background: rgba(239,68,68,.2); color: #fca5a5; border: 1px solid rgba(239,68,68,.35); }
+    .log-badge-warn { background: rgba(245,158,11,.18); color: #fcd34d; border: 1px solid rgba(245,158,11,.35); }
+    .log-badge-ok { background: rgba(34,197,94,.15); color: #86efac; border: 1px solid rgba(34,197,94,.3); }
+    .log-badge-info { background: rgba(96,165,250,.15); color: #93c5fd; border: 1px solid rgba(96,165,250,.3); }
+
+    .log-card-time {
+      margin-left: auto;
+      font-size: .72rem;
+      color: var(--muted);
+      font-family: "IBM Plex Mono", monospace;
+    }
+
+    .log-card-path {
+      padding: .65rem .75rem .45rem;
+      font-size: .88rem;
+      font-weight: 500;
+      word-break: break-all;
+      line-height: 1.4;
+    }
+
+    .log-card-method {
+      display: inline-block;
+      font-size: .68rem;
+      font-weight: 700;
+      padding: .12rem .4rem;
+      margin-right: .4rem;
+      border-radius: 4px;
+      background: rgba(96,165,250,.15);
+      color: #93c5fd;
+      vertical-align: middle;
+    }
+
+    .log-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: .45rem .75rem;
+      padding: 0 .75rem .65rem;
+    }
+
+    .log-card-field {
+      font-size: .75rem;
+    }
+
+    .log-card-field span {
+      display: block;
+      font-size: .65rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: var(--muted);
+      margin-bottom: .12rem;
+    }
+
+    .log-card-field strong {
+      font-weight: 500;
+      color: var(--text);
+      word-break: break-all;
+    }
+
+    .log-card-raw {
+      border-top: 1px solid var(--border);
+    }
+
+    .log-card-raw summary {
+      padding: .45rem .75rem;
+      font-size: .72rem;
+      color: var(--accent);
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+    }
+
+    .log-card-raw summary::-webkit-details-marker { display: none; }
+
+    .log-card-raw pre {
+      margin: 0;
+      max-height: 220px;
+      border-radius: 0;
+      font-size: .7rem;
+    }
+
+    .md-table-wrap {
+      overflow-x: auto;
+      margin: .5rem 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .md-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .8rem;
+    }
+
+    .md-table th,
+    .md-table td {
+      padding: .45rem .65rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .md-table th {
+      background: rgba(0,0,0,.25);
+      color: var(--muted);
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .md-table tr:last-child td { border-bottom: none; }
+
+    .md-table td code { font-size: .78rem; }
+
+    .bubble p { margin: .35rem 0; }
+    .bubble strong { color: #f0c674; font-weight: 600; }
+
     .welcome {
       text-align: center;
       padding: 3rem 2rem;
@@ -990,6 +1202,54 @@
 
     function historySummary(content) {
       const text = String(content || "");
+
+      const conversational = text.match(
+        /Evet — son \*\*(\d+) saat\*\* içinde `([^`]+)` log grubunda \*\*(\d+)\*\* adet \*\*([^*]+)\*\*/i
+      );
+      if (conversational) {
+        return `[Önceki: \`${conversational[2]}\` son ${conversational[1]} saat ${conversational[4]}: ${conversational[3]} eşleşme. Detay için aynı grubu kullan.]`;
+      }
+
+      const legacySummary = text.match(
+        /\*\*`([^`]+)`\*\* — son \*\*(\d+) saat\*\* · \*\*([^*]+)\*\*: \*\*(\d+)\*\*/i
+      );
+      if (legacySummary) {
+        return `[Önceki: \`${legacySummary[1]}\` son ${legacySummary[2]} saat ${legacySummary[3]}: ${legacySummary[4]} eşleşme. Detay için aynı grubu kullan.]`;
+      }
+
+      const detailHeader = text.match(/\*\*`([^`]+)`\*\* — son \*\*(\d+) saat\*\*/i);
+      if (detailHeader) {
+        return `[Önceki: \`${detailHeader[1]}\` son ${detailHeader[2]} saat detay gösterildi. Tekrar detay için aynı grubu kullan.]`;
+      }
+
+      const priorGroup = text.match(/\*\*Önceki grup\*\* `([^`]+)`/i);
+      if (priorGroup) {
+        return `[Önceki: \`${priorGroup[1]}\` kapsam sorgusu yapıldı. Detay için aynı grubu kullan.]`;
+      }
+
+      const onlyGroup = text.match(/yalnızca\*?\*?\s*`([^`]+)`/i);
+      if (onlyGroup) {
+        return `[Önceki: yalnızca \`${onlyGroup[1]}\` grubunda eşleşme. Detay için aynı grubu kullan.]`;
+      }
+
+      if (/\*\*Sistem özeti/i.test(text)) {
+        const ranked = [];
+        for (const match of text.matchAll(/\|\s*\d+\s*\|\s*`([^`]+)`\s*\|\s*\*\*(\d+)\*\*\s*\|/g)) {
+          ranked.push([match[1], match[2]]);
+        }
+        if (ranked.length === 1) {
+          const hoursMatch = text.match(/son\s*\*\*(\d+)\s*saat\*\*|\(son\s*(\d+)\s*saat/i);
+          const hours = hoursMatch ? (hoursMatch[1] || hoursMatch[2]) : "?";
+          const filterMatch = text.match(/\*\*Sistem özeti — ([^*]+)\*\*/i);
+          const filterName = filterMatch ? filterMatch[1].trim() : "arama";
+          return `[Önceki: \`${ranked[0][0]}\` son ${hours} saat ${filterName}: ${ranked[0][1]} eşleşme. Detay için aynı grubu kullan.]`;
+        }
+        if (ranked.length > 1) {
+          const sample = ranked.slice(0, 5).map(([g]) => `\`${g}\``).join(", ");
+          return `[Önceki: ${ranked.length} log grubu: ${sample}. Detay için grup adını belirt.]`;
+        }
+      }
+
       const logMatch = text.match(/^\*\*(\d+)\s+log grubu\*\*/m);
       if (logMatch) {
         return `[Önceki: ${logMatch[1]} log grubu listelendi — tekrar görmek için "log gruplarını göster" de.]`;
@@ -999,6 +1259,10 @@
         return `[Önceki: ${alarmMatch[1]} aktif alarm listelendi.]`;
       }
       if (text.length > 1200 && /(log grubunda|hata|error|5\d{2}|400|kayıt bulunamadı|satır)/i.test(text)) {
+        const inlineGroup = text.match(/`(\/aws\/[^`]+)`/);
+        if (inlineGroup) {
+          return `[Önceki: \`${inlineGroup[1]}\` log araması yapıldı. Detay için aynı grubu kullan.]`;
+        }
         return "[Önceki: log içeriği/hata araması yapıldı ve özetlendi.]";
       }
       const searchMatch = text.match(/^\*\*Son \d+ saat — (\d+) eşleşen satır\*\*/m);
@@ -1011,12 +1275,19 @@
     function buildHistoryPayload(history) {
       const eligible = (history || [])
         .filter(m => m.role === "user" || m.role === "assistant")
-        .slice(0, -1)
         .slice(-MAX_HISTORY_FOR_API);
-      return eligible.map(m => ({
-        role: m.role,
-        content: m.role === "assistant" ? historySummary(m.content) : compactMessageContent(m.content, MAX_HISTORY_CHARS),
-      }));
+      return eligible.map(m => {
+        const entry = {
+          role: m.role,
+          content: m.role === "assistant"
+            ? historySummary(m.content)
+            : compactMessageContent(m.content, MAX_HISTORY_CHARS),
+        };
+        if (m.role === "assistant" && m.extras?.log_context) {
+          entry.log_context = m.extras.log_context;
+        }
+        return entry;
+      });
     }
 
     function persistChats() {
@@ -1159,22 +1430,320 @@
       }
     }
 
+    function renderInlineMarkdown(text) {
+      let s = escapeHtml(String(text || ""));
+      s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      s = s.replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
+      return s;
+    }
+
+    function shortLogGroupName(path) {
+      const p = String(path || "").replace(/^\/+/, "");
+      const parts = p.split("/");
+      if (parts.length >= 2) return parts.slice(-2).join("/");
+      return p || path;
+    }
+
+    function parseAccessLogBlock(block) {
+      const result = { timestamp: "", logGroup: "", data: {} };
+      const normalized = String(block || "").replace(/\r\n/g, "\n");
+
+      const tsMatch = normalized.match(/@timestamp[\t ]+(.+)/);
+      if (tsMatch) result.timestamp = tsMatch[1].trim();
+      const logMatch = normalized.match(/@log[\t ]+(.+)/);
+      if (logMatch) result.logGroup = logMatch[1].trim();
+
+      const messageIdx = normalized.indexOf("@message");
+      if (messageIdx !== -1) {
+        const afterMessage = normalized.slice(messageIdx + "@message".length).trimStart();
+        const jsonStart = afterMessage.indexOf("{");
+        if (jsonStart !== -1) {
+          let depth = 0;
+          let end = -1;
+          for (let i = jsonStart; i < afterMessage.length; i++) {
+            if (afterMessage[i] === "{") depth++;
+            else if (afterMessage[i] === "}") {
+              depth--;
+              if (depth === 0) {
+                end = i;
+                break;
+              }
+            }
+          }
+          if (end !== -1) {
+            try {
+              const parsed = JSON.parse(afterMessage.slice(jsonStart, end + 1));
+              if (parsed && typeof parsed === "object") result.data = parsed;
+            } catch {
+              // fall through to tab-field parsing
+            }
+          }
+        }
+      }
+
+      if (!Object.keys(result.data).length) {
+        const jsonMatch = normalized.match(/\{[\s\S]*?\}/);
+        if (jsonMatch) {
+          try {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (parsed && typeof parsed === "object") result.data = parsed;
+          } catch {
+            // fall through
+          }
+        }
+      }
+
+      for (const line of normalized.split("\n")) {
+        const tabIdx = line.indexOf("\t");
+        if (tabIdx <= 0) continue;
+        const key = line.slice(0, tabIdx).trim();
+        if (!key || key.startsWith("@")) continue;
+        const val = line.slice(tabIdx + 1).trim();
+        if (!val || val === "-" || val === "null") continue;
+        const current = result.data[key];
+        if (current === undefined || current === "" || current === "-" || current === "null") {
+          result.data[key] = val;
+        }
+      }
+
+      return result;
+    }
+
+    function logEntryBadge(data) {
+      const errType = String(data.errorResponseType || "").trim();
+      const status = String(data.status || "").trim();
+      const badges = [];
+
+      if (status && status !== "-" && status !== "null") {
+        const code = parseInt(status, 10);
+        const cls = code >= 500 ? "log-badge-err" : code >= 400 ? "log-badge-warn" : "log-badge-ok";
+        badges.push(`<span class="log-badge ${cls}">HTTP ${escapeHtml(status)}</span>`);
+      }
+      if (errType && errType !== "-" && errType !== "null") {
+        const cls = /AUTHORIZER|ACCESS_DENIED/i.test(errType) ? "log-badge-warn" : "log-badge-err";
+        badges.push(`<span class="log-badge ${cls}">${escapeHtml(errType)}</span>`);
+      }
+      if (badges.length) return badges.join("");
+      return `<span class="log-badge log-badge-info">Kayıt</span>`;
+    }
+
+    function formatLogTimestamp(ts) {
+      if (!ts) return "";
+      const m = String(ts).match(/(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/);
+      if (m) return `${m[1]} ${m[2]} UTC`;
+      return String(ts);
+    }
+
+    function renderAccessLogCard(block, index) {
+      const parsed = parseAccessLogBlock(block);
+      const d = parsed.data || {};
+      const method = String(d.httpMethod || "").trim();
+      const path = String(d.path || d.resourcePath || "").trim();
+      const tenant = d.tenantDomain && d.tenantDomain !== "-" ? d.tenantDomain : "";
+      const fields = [
+        ["Tenant", tenant],
+        ["IP", d.ip],
+        ["Latency", d.responseLatency ? `${d.responseLatency} ms` : ""],
+        ["Backend", d.integrationLatency && d.integrationLatency !== "-" ? `${d.integrationLatency} ms` : ""],
+        ["Request ID", d.requestId],
+        ["User-Agent", d.userAgent],
+      ].filter(([, v]) => v && v !== "-");
+
+      const fieldsHtml = fields.map(([label, value]) => `
+        <div class="log-card-field">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(String(value))}</strong>
+        </div>`).join("");
+
+      const pathHtml = (method || path)
+        ? `<div class="log-card-path">${method ? `<span class="log-card-method">${escapeHtml(method)}</span>` : ""}${escapeHtml(path)}</div>`
+        : "";
+
+      return `
+        <article class="log-card">
+          <div class="log-card-top">
+            <span class="log-badge log-badge-info">#${index}</span>
+            ${logEntryBadge(d)}
+            <span class="log-card-time">${escapeHtml(formatLogTimestamp(parsed.timestamp || d.requestTime))}</span>
+          </div>
+          ${pathHtml}
+          ${fieldsHtml ? `<div class="log-card-grid">${fieldsHtml}</div>` : ""}
+          <details class="log-card-raw">
+            <summary>Ham kayıt göster</summary>
+            <pre>${escapeHtml(block.trim())}</pre>
+          </details>
+        </article>`;
+    }
+
+    function renderMarkdownTable(tableLines) {
+      const rows = tableLines
+        .filter(line => line.trim().startsWith("|"))
+        .map(line => line.split("|").slice(1, -1).map(cell => cell.trim()));
+      if (rows.length < 2) return "";
+      const header = rows[0];
+      const body = rows.slice(2);
+      const headHtml = header.map(cell => `<th>${renderInlineMarkdown(cell)}</th>`).join("");
+      const bodyHtml = body.map(row => `
+        <tr>${row.map(cell => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>
+      `).join("");
+      return `
+        <div class="md-table-wrap">
+          <table class="md-table">
+            <thead><tr>${headHtml}</tr></thead>
+            <tbody>${bodyHtml}</tbody>
+          </table>
+        </div>`;
+    }
+
+    function isLogDetailResponse(text) {
+      return /Kayıtlar \(CloudWatch|@timestamp[\t ]/.test(text) && /```/.test(text);
+    }
+
+    function renderLogDetailView(text) {
+      const raw = String(text || "");
+      const parts = raw.split(/```/);
+      const proseParts = [];
+      const codeBlocks = [];
+      parts.forEach((part, idx) => {
+        if (idx % 2 === 0) proseParts.push(part);
+        else codeBlocks.push(part);
+      });
+
+      const headerText = proseParts[0] || "";
+      const headerMatch = headerText.match(
+        /\*\*`([^`]+)`\*\*\s*—\s*son\s*\*\*(\d+)\s*saat\*\*\s*·\s*\*\*([^*]+)\*\*\s*·\s*\*\*(\d+)\*\*\s*kayıt([^]*?)$/i
+      );
+      const windowMatch = headerText.match(/\((\d{4}-\d{2}-\d{2}T[^)]+)\)/);
+
+      let headerHtml = "";
+      if (headerMatch) {
+        const [, group, hours, filterName, count, rest] = headerMatch;
+        const breakdownMatch = rest.match(/\*\*Tür dağılımı:\*\*\s*([^\n]+)/i);
+        const chips = breakdownMatch
+          ? breakdownMatch[1].split(",").map(chip => `<span class="log-chip">${renderInlineMarkdown(chip.trim())}</span>`).join("")
+          : "";
+        headerHtml = `
+          <div class="log-report-header">
+            <div class="log-report-title">${escapeHtml(shortLogGroupName(group))}</div>
+            <div class="log-report-sub">
+              Son <strong>${escapeHtml(hours)} saat</strong>
+              · <strong>${escapeHtml(filterName.trim())}</strong>
+              · <strong>${escapeHtml(count)} kayıt</strong>
+              ${windowMatch ? `<br><span style="font-size:.72rem">${escapeHtml(windowMatch[1])}</span>` : ""}
+            </div>
+            ${chips ? `<div class="log-report-chips">${chips}</div>` : ""}
+          </div>`;
+      } else {
+        headerHtml = `<div class="log-report-header"><div class="log-report-sub">${renderInlineMarkdown(headerText.split("\n").slice(0, 3).join(" "))}</div></div>`;
+      }
+
+      const cardsHtml = codeBlocks
+        .map(block => block.trim())
+        .filter(block => block.includes("@timestamp") || block.startsWith("{"))
+        .map((block, idx) => renderAccessLogCard(block, idx + 1))
+        .join("");
+
+      const noteMatch = raw.match(/_Not:([\s\S]*?)_/);
+      const noteHtml = noteMatch
+        ? `<em class="md-note">${renderInlineMarkdown("Not:" + noteMatch[1])}</em>`
+        : "";
+
+      const groupsMatch = raw.match(/\*\*Aranan log grupları[^*]*\*\*[^`]*((?:- `[^`]+`\n?)+)/);
+      const groupsHtml = groupsMatch
+        ? `<div class="log-report-sub" style="margin-top:.25rem">${groupsMatch[1].trim().split("\n").map(l => renderInlineMarkdown(l)).join("<br>")}</div>`
+        : "";
+
+      return `
+        <div class="log-report">
+          ${headerHtml}
+          <div class="log-cards">${cardsHtml}</div>
+          ${noteHtml}
+          ${groupsHtml}
+        </div>`;
+    }
+
+    function renderMarkdownContent(text) {
+      const raw = String(text || "");
+      const lines = raw.split("\n");
+      const chunks = [];
+      let i = 0;
+
+      while (i < lines.length) {
+        if (lines[i].trim().startsWith("|")) {
+          const tableLines = [];
+          while (i < lines.length && lines[i].trim().startsWith("|")) {
+            tableLines.push(lines[i]);
+            i++;
+          }
+          chunks.push(renderMarkdownTable(tableLines));
+          continue;
+        }
+
+        if (lines[i].trim().startsWith("```")) {
+          const codeLines = [];
+          i++;
+          while (i < lines.length && !lines[i].trim().startsWith("```")) {
+            codeLines.push(lines[i]);
+            i++;
+          }
+          if (i < lines.length) i++;
+          const code = codeLines.join("\n");
+          if (code.includes("@timestamp")) {
+            chunks.push(renderAccessLogCard(code, chunks.filter(c => c.includes("log-card")).length + 1));
+          } else {
+            chunks.push(`<pre>${escapeHtml(code)}</pre>`);
+          }
+          continue;
+        }
+
+        const para = [];
+        while (
+          i < lines.length
+          && lines[i].trim()
+          && !lines[i].trim().startsWith("|")
+          && !lines[i].trim().startsWith("```")
+        ) {
+          para.push(lines[i]);
+          i++;
+        }
+        if (para.length) {
+          const body = para.join("\n");
+          if (/^_[^_\n]+_$/.test(body.trim()) || body.trim().startsWith("_Not:")) {
+            chunks.push(`<em class="md-note">${renderInlineMarkdown(body.replace(/^_|_$/g, ""))}</em>`);
+          } else {
+            chunks.push(`<p>${renderInlineMarkdown(body).replace(/\n/g, "<br>")}</p>`);
+          }
+        }
+        if (i < lines.length && !lines[i].trim()) i++;
+      }
+
+      return chunks.join("") || `<p>${renderInlineMarkdown(raw).replace(/\n/g, "<br>")}</p>`;
+    }
+
     function formatAssistantContent(text) {
       const raw = String(text || "");
+      if (isLogDetailResponse(raw)) {
+        return renderLogDetailView(raw);
+      }
+
+      if (/\|[-:| ]+\|/.test(raw) || /\*\*[^*]+\*\*/.test(raw)) {
+        return renderMarkdownContent(raw);
+      }
+
       const lines = raw.split("\n");
       const firstListIdx = lines.findIndex(line => /^\d+\.\s+`/.test(line));
       if (firstListIdx === -1) {
-        return escapeHtml(raw).replace(/\n/g, "<br>");
+        return renderMarkdownContent(raw);
       }
 
       const headerLines = lines.slice(0, firstListIdx);
       const listLines = lines.slice(firstListIdx);
       const headerHtml = headerLines.length
-        ? escapeHtml(headerLines.join("\n")).replace(/\n/g, "<br>") + "<br><br>"
+        ? renderMarkdownContent(headerLines.join("\n"))
         : "";
 
       if (listLines.length <= LIST_PREVIEW_LINES) {
-        return headerHtml + `<div class="list-body">${listLines.map(l => escapeHtml(l)).join("<br>")}</div>`;
+        return headerHtml + `<div class="list-body">${listLines.map(l => renderInlineMarkdown(l)).join("<br>")}</div>`;
       }
 
       const listId = "list-" + crypto.randomUUID().slice(0, 8);
@@ -1182,8 +1751,8 @@
       const hidden = listLines.slice(LIST_PREVIEW_LINES);
       return `
         ${headerHtml}
-        <div class="list-body" id="${listId}-visible">${preview.map(l => escapeHtml(l)).join("<br>")}</div>
-        <div class="list-body" id="${listId}-hidden" style="display:none">${hidden.map(l => escapeHtml(l)).join("<br>")}</div>
+        <div class="list-body" id="${listId}-visible">${preview.map(l => renderInlineMarkdown(l)).join("<br>")}</div>
+        <div class="list-body" id="${listId}-hidden" style="display:none">${hidden.map(l => renderInlineMarkdown(l)).join("<br>")}</div>
         <button type="button" class="expand-list-btn" id="${listId}-btn"
           onclick="document.getElementById('${listId}-hidden').style.display='block';this.remove();">
           + ${hidden.length} satır daha göster
@@ -1355,6 +1924,7 @@
             tool_calls: data.tool_calls,
             iterations: data.iterations,
             elapsed,
+            log_context: data.log_context || null,
           },
           true,
           requestChatId

@@ -21,30 +21,9 @@ from mcp.types import CallToolResult, Tool
 from openai import AsyncOpenAI, BadRequestError
 from pydantic import BaseModel, Field
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-VLLM_BASE_URL = os.getenv(
-    "VLLM_BASE_URL", "http://vllm-gptoss.llm-model.svc.cluster.local:8080/v1"
-)
-MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-oss-20b")
-AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
-HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", "8080"))
-MAX_TOOL_ITERATIONS = int(os.getenv("MAX_TOOL_ITERATIONS", "10"))
-REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "300"))
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOGS_QUERY_POLL_INTERVAL = float(os.getenv("LOGS_QUERY_POLL_INTERVAL", "1.0"))
-LOGS_QUERY_MAX_WAIT = int(os.getenv("LOGS_QUERY_MAX_WAIT", "60"))
-MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "6"))
-MAX_HISTORY_MESSAGE_CHARS = int(os.getenv("MAX_HISTORY_MESSAGE_CHARS", "2500"))
-MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "8000"))
-MAX_LOG_GROUPS_LIST = int(os.getenv("MAX_LOG_GROUPS_LIST", "1000"))
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "700"))
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
-DASHBOARD_CACHE_TTL = int(os.getenv("DASHBOARD_CACHE_TTL", "45"))
-DASHBOARD_ERROR_DETAILS_LIMIT = int(os.getenv("DASHBOARD_ERROR_DETAILS_LIMIT", "150"))
+from app.config import *
+from app.agent import find_api_connection_error, get_openai_tools, get_system_prompt, run_agent
+from app.queries import LOG_SEARCH_QUERY_PRESETS, LogResponseMode, LogSearchFilter, resolve_log_search_query
 
 logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -55,17 +34,28 @@ logger = logging.getLogger(__name__)
 
 CLOUDWATCH_TOOLS = {
     "describe_log_groups": (
-        "List CloudWatch log groups. Single filter: log_group_name_prefix (user's term as-is). "
-        "Multiple types in one question: log_group_name_keywords (OR). "
-        "All results: max_items=1000, prefix null. Fuzzy matching is automatic."
+        "List CloudWatch log group NAMES (catalog) only — discover or filter groups by vague/partial "
+        "terms (e.g. 'api gateway logları', 'lambda grupları'). "
+        "Do NOT use when the user already gave a full log group path (with '/') — use query_log_group instead. "
+        "Do NOT use for error/HTTP counts, 500 searches, rankings, or log line content — "
+        "use search_logs_across_groups or query_log_group. "
+        "Single filter: log_group_name_prefix. Multiple types: log_group_name_keywords (OR). "
+        "Fuzzy matching is automatic."
     ),
     "analyze_log_group": (
         "Legacy error analysis for one log group. Prefer query_log_group when user gives a log group path."
     ),
     "query_log_group": (
-        "Query log LINES in ONE named log group. Use when user gives a path like "
-        "/aws/apigateway/... or aws/lambda/.... Params: log_group_name, hours (default 1), "
-        "search_filter: errors | http_400 | http_5xx. Do NOT ask clarifying questions."
+        "Query log LINES in exactly ONE log group. **Use this whenever the user gives a full log group path** "
+        "(contains '/', e.g. /aws/apigateway/era-api-gateway-dev/access-logs or aws/apigateway/...). "
+        "Do NOT use describe_log_groups or search_logs_across_groups for that case. "
+        "Params: log_group_name (exact path); time via hours (MUST match user: 'son 12 saat' → hours=12) "
+        "OR start_time+end_time (ISO-8601 UTC); search_filter presets: errors, http_2xx, "
+        "http_400, http_401, http_403, http_404, http_500, http_500_backend (backend 500, excludes "
+        "AUTHORIZER_FAILURE/ACCESS_DENIED), http_502, http_503, http_504, http_5xx; "
+        "tenant_filter for customer/tenant slug in access logs (tenantDomain, tenantId, path); "
+        "response_mode: summary | detail | analysis (analysis = breakdown + likely causes from real data). "
+        "If results need refinement, recall this same tool — do not switch tools."
     ),
     "execute_log_insights_query": (
         "Search log LINES in SPECIFIC named log groups (you must already have names). "
@@ -73,12 +63,18 @@ CLOUDWATCH_TOOLS = {
         "search_logs_across_groups instead — do NOT ask which log group."
     ),
     "search_logs_across_groups": (
-        "Search log LINES across many log groups when user wants errors, HTTP status codes "
-        "(400, 4xx, 5XX), or log patterns but did NOT specify a log group. "
-        "Call this immediately — do NOT ask 'hangi log grubu'. "
-        "Provide query_string (Insights syntax). Use max_result_lines=150–200 when user wants detail. "
-        "Optional log_group_name_keywords; if omitted, searches containerinsights, api-gateway, "
-        "alb, lambda, cloudfront."
+        "Search logs across multiple log groups or system-wide. "
+        "**Do NOT use when the user named one exact full log group path** — use query_log_group instead. "
+        "Use here for: system-wide counts/rankings, multiple groups, or fuzzy keywords "
+        "('api gateway logları' without a full path). "
+        "Scope: omit log_group_names for system-wide default groups; "
+        "pass log_group_names for specific groups (A, B, E, F…). "
+        "response_mode: summary=counts per group (system-wide 500/errors), "
+        "count_only=counts for named groups only (no log lines), "
+        "detail=full log lines (use max_result_lines=150–200). "
+        "Set hours from the user's time phrase ('son 12 saat' → hours=12). "
+        "Ask the user ONE clarifying question only when scope (all vs specific) or "
+        "output (count vs detail) is genuinely unclear."
     ),
     "get_logs_insight_query_results": (
         "Fetch results for a running/completed Insights query_id."
@@ -112,68 +108,13 @@ CLOUDWATCH_TOOLS = {
 
 ALLOWED_TOOL_NAMES = set(CLOUDWATCH_TOOLS.keys())
 
-# ---------------------------------------------------------------------------
-# System prompt
-# ---------------------------------------------------------------------------
-
-SYSTEM_PROMPT = f"""
-You are a CloudWatch SRE assistant. YOU decide which tools to call from the user's message.
-
-## Step 1 — What does the user want?
-
-| Intent | User signals (TR/EN) | Tool |
-|--------|----------------------|------|
-| Log group NAMES (catalog) | "log grupları listele", "hangi log grouplar var", "tüm log grupları" | describe_log_groups |
-| Log CONTENT — group unknown | "400 hataları", "5XX var mı", "errorleri listele", "farketmez", "bilmem sen bul" | search_logs_across_groups |
-| Log CONTENT — group known | user names a log group path | query_log_group |
-| Alarms — currently in ALARM | "aktif alarm" | get_active_alarms |
-| Alarms — history / triggered | "tetiklendi", "alarm geçmişi", "son 24 saatte hangi alarmlar" | get_alarm_history (alarm_name optional — omit for all) |
-| Metrics | CPU, memory, ECS metrik | analyze_metric / get_metric_data |
-
-CRITICAL rules:
-- HTTP status searches (400, 4xx, 5XX) = log LINE search, NOT log group catalog.
-- If user does NOT name a log group → call search_logs_across_groups. NEVER ask "hangi log grubu".
-- "farketmez / bilmem / sen bul / hangisinde varsa" → search_logs_across_groups with the same filter as the prior question.
-- Named log group path in message (e.g. `/aws/apigateway/.../access-logs`) → query_log_group immediately.
-- Alarm history without a specific name → get_alarm_history with start/end only (no alarm_name). NEVER ask user for alarm names.
-
-## Query examples for search_logs_across_groups
-
-400 errors:
-fields @timestamp, @log, @message
-| filter @message like /(?i)(\\b400\\b|status.?code.?400|HTTP\\/1\\.[01] 400)/
-| sort @timestamp desc | limit 50
-
-5XX errors:
-fields @timestamp, @log, @message
-| filter @message like /(?i)(\\b5\\d{{2}}\\b|status.?code.?5\\d{{2}}|HTTP\\/1\\.[01] 5\\d{{2}})/
-| sort @timestamp desc | limit 50
-
-Generic errors:
-fields @timestamp, @log, @message
-| filter @message like /(?i)(error|exception|fail|fatal)/
-| sort @timestamp desc | limit 50
-
-## Other examples
-- "tüm log gruplarımı listele" → describe_log_groups(max_items=1000)
-- "codebuild ve lambda log grupları" → describe_log_groups(log_group_name_keywords=[...])
-- Times: "son 1 saat" → hours=1; default 1h if unspecified.
-
-## Rules
-- Latest user message defines intent. Prior turn clarifies filter (400 vs 5XX), not log group name.
-- Pass user terms as-is; fuzzy AWS matching is server-side.
-- Ask at most ONE clarifying question, and only if the request is truly impossible to run.
-- Allowed tools: {", ".join(sorted(ALLOWED_TOOL_NAMES))}
-- Default region: {AWS_REGION}
-
-## Language
-Reply in the same language as the user's latest message.
-
-## Response format
-Search/log-line answers are formatted server-side from real tool data.
-NEVER invent log group names, counts, or placeholder rows (no "other-log-group", no fake tables).
-If you need more detail, call search_logs_across_groups again with a higher max_result_lines.
-"""
+DEFAULT_LOG_SEARCH_KEYWORDS = [
+    "containerinsights",
+    "api-gateway",
+    "alb",
+    "lambda",
+    "cloudfront",
+]
 
 # ---------------------------------------------------------------------------
 # MCP app
@@ -195,7 +136,7 @@ mcp = FastMCP(
 @mcp.prompt()
 def investigation_prompt() -> str:
     """CloudWatch incident investigation system prompt."""
-    return SYSTEM_PROMPT
+    return get_system_prompt()
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +177,46 @@ def parse_time(value: Optional[str], default: Optional[datetime] = None) -> date
 
 def to_epoch_seconds(value: datetime) -> int:
     return int(value.timestamp())
+
+
+def resolve_query_time_window(
+    *,
+    hours: int | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> tuple[datetime, datetime, int]:
+    if start_time and end_time:
+        start_dt = parse_time(start_time)
+        end_dt = parse_time(end_time)
+    else:
+        hours_val = min(168, max(1, int(hours or 1)))
+        end_dt = utc_now()
+        start_dt = end_dt - timedelta(hours=hours_val)
+    if end_dt <= start_dt:
+        raise ValueError("end_time must be after start_time")
+    hours_out = max(1, int((end_dt - start_dt).total_seconds() // 3600) or 1)
+    return start_dt, end_dt, hours_out
+
+
+def normalize_log_group_path(raw: str) -> str:
+    path = (raw or "").strip()
+    if path.startswith("aws/"):
+        return "/" + path
+    if path and not path.startswith("/"):
+        return "/" + path.lstrip("/")
+    return path
+
+
+def normalize_insights_log_group(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if ":log-group:" in text:
+        return text.split(":log-group:", 1)[-1]
+    # CloudWatch Insights @log field: 123456789012:/aws/lambda/my-fn
+    if re.match(r"^\d+:(/.+)", text):
+        return text.split(":", 1)[1]
+    return text
 
 
 def matches_log_group_prefix(name: str, prefix: Optional[str]) -> bool:
@@ -366,6 +347,21 @@ def normalize_log_group_prefix_arg(prefix: Optional[str]) -> Optional[str]:
     return resolve_log_group_search_keyword(stripped)
 
 
+def dedupe_search_keywords(keywords: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for raw in keywords:
+        label = (raw or "").strip()
+        if not label:
+            continue
+        normalized = resolve_log_group_search_keyword(label)
+        key = normalized.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(normalized)
+    return unique
+
+
 def dedupe_log_groups(log_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
@@ -461,468 +457,6 @@ def format_log_groups_list(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# Tools whose output is formatted on the server from real AWS data (no LLM synthesis).
-DIRECT_FORMAT_TOOLS = frozenset({
-    "describe_log_groups",
-    "get_active_alarms",
-    "get_alarm_history",
-    "analyze_metric",
-    "search_logs_across_groups",
-    "execute_log_insights_query",
-    "query_log_group",
-})
-# Search tools: return formatted answer immediately after the tool runs (prevents hallucination).
-IMMEDIATE_FORMAT_TOOLS = frozenset({
-    "search_logs_across_groups",
-    "execute_log_insights_query",
-    "query_log_group",
-})
-
-LOG_GROUP_PATH_PATTERN = re.compile(
-    r"(?P<path>/aws/[\w\-\./]+|aws/[\w\-\./]+)",
-    re.IGNORECASE,
-)
-
-LOG_SEARCH_QUERY_PRESETS = {
-    "errors": (
-        "fields @timestamp, @log, @message\n"
-        "| filter @message like /(?i)(\"Level\":\"Error\"|ACCESS_DENIED|errorResponseType|"
-        "Unhandled exception|exception|fatal|stack trace)/\n"
-        "| filter @message not like /\"errorMessage\":\"-\"|\"Level\":\"Information\"/\n"
-        "| sort @timestamp desc\n"
-        "| limit 50"
-    ),
-    "http_400": (
-        "fields @timestamp, @log, @message\n"
-        "| filter @message like /(?i)(statusCode[\"']?\\s*[:=]\\s*\"?400\"?|"
-        "status.?code.?400|HTTP\\/1\\.[01] 400\\b)/\n"
-        "| sort @timestamp desc\n"
-        "| limit 50"
-    ),
-    "http_500": (
-        "fields @timestamp, @log, @message\n"
-        "| filter @message like /(?i)(statusCode[\"']?\\s*[:=]\\s*\"?500\"?|"
-        "status.?code.?500|HTTP\\/1\\.[01] 500\\b|\\\"StatusCode\\\":500)/\n"
-        "| sort @timestamp desc\n"
-        "| limit 50"
-    ),
-    "http_5xx": (
-        "fields @timestamp, @log, @message\n"
-        "| filter @message like /(?i)(statusCode[\"']?\\s*[:=]\\s*\"?5\\d{2}\"?|"
-        "status.?code.?5\\d{2}|HTTP\\/1\\.[01] 5\\d{2}\\b)/\n"
-        "| sort @timestamp desc\n"
-        "| limit 50"
-    ),
-}
-
-LogSearchFilter = Literal["errors", "http_400", "http_500", "http_5xx"]
-
-SHOW_LOG_GROUPS_AGAIN = re.compile(
-    r"göstersene|göster\s*abi|listeyi\s*göster|tekrar\s*listele|hepsini\s*göster|göster\s*bana",
-    re.I,
-)
-
-INSIGHTS_MAX_LOG_GROUPS = 50
-DEFAULT_LOG_SEARCH_KEYWORDS = [
-    "containerinsights",
-    "api-gateway",
-    "alb",
-    "lambda",
-    "cloudfront",
-]
-
-
-def normalize_log_group_path(raw: str) -> str:
-    path = (raw or "").strip()
-    if path.startswith("aws/"):
-        return "/" + path
-    if not path.startswith("/"):
-        return "/" + path.lstrip("/")
-    return path
-
-
-def extract_log_group_paths(message: str) -> list[str]:
-    paths: list[str] = []
-    for match in LOG_GROUP_PATH_PATTERN.finditer(message):
-        paths.append(normalize_log_group_path(match.group("path")))
-    return list(dict.fromkeys(paths))
-
-
-def parse_hours_from_message(message: str) -> int:
-    lowered = message.lower()
-    match = re.search(r"son\s+(\d+)\s*saat", lowered)
-    if match:
-        return min(24, max(1, int(match.group(1))))
-    if "24 saat" in lowered or "dün" in lowered:
-        return 24
-    return 1
-
-
-def infer_log_search_filter(message: str) -> LogSearchFilter:
-    lowered = message.lower()
-    if re.search(r"\b500\b|500\s*l", lowered):
-        return "http_500"
-    if re.search(r"5\s*xx", lowered):
-        return "http_5xx"
-    if re.search(r"4\s*xx|\b400\b", lowered):
-        return "http_400"
-    return "errors"
-
-
-def normalize_insights_log_group(name: str) -> str:
-    if not name:
-        return name
-    if re.match(r"^\d+:", name):
-        return name.split(":", 1)[1]
-    return name
-
-
-def should_list_log_groups(message: str, history: list[dict[str, Any]] | None) -> bool:
-    if re.search(r"\blog\s*gr", message, re.I) and re.search(
-        r"listele|liste|tüm|tamam|hepsi|göster", message, re.I
-    ):
-        return True
-    if not SHOW_LOG_GROUPS_AGAIN.search(message):
-        return False
-    for item in (history or [])[-8:]:
-        content = item.get("content", "")
-        if item.get("role") == "user" and re.search(r"\blog\s*gr", content, re.I):
-            return True
-        if "log grubu" in content or "kayıt listelendi" in content:
-            return True
-    return False
-
-
-def is_http_status_search(message: str) -> bool:
-    return bool(re.search(r"4\s*xx|\b400\b|5\s*xx|\b500\b|500\s*l", message, re.I))
-
-
-def is_named_log_content_query(message: str) -> bool:
-    if not extract_log_group_paths(message):
-        return False
-    if re.search(r"\blog\s*gr", message, re.I) and re.search(
-        r"\b(listele|liste|hangi|tüm)\b", message, re.I
-    ):
-        if not re.search(r"error|hata|5\d{2}|400|exception", message, re.I):
-            return False
-    return bool(
-        re.search(
-            r"error|hata|hatalar|exception|5\s*xx|5\d{2}|400|4\s*xx|fail|fatal|"
-            r"var\s*mı|içerik|satır|timeout",
-            message,
-            re.I,
-        )
-    )
-
-
-def format_active_alarms_list(data: dict[str, Any]) -> str:
-    metric_alarms = data.get("metric_alarms") or []
-    composite_alarms = data.get("composite_alarms") or []
-    region = data.get("region", AWS_REGION)
-    total = len(metric_alarms) + len(composite_alarms)
-    lines = [f"**{total} aktif alarm** ({region})", ""]
-    index = 1
-    for alarm in metric_alarms:
-        name = alarm.get("AlarmName", "")
-        state = alarm.get("StateValue", "ALARM")
-        metric = alarm.get("MetricName", "")
-        suffix = f" — metric: `{metric}`" if metric else ""
-        lines.append(f"{index}. `{name}` ({state}){suffix}")
-        index += 1
-    for alarm in composite_alarms:
-        name = alarm.get("AlarmName", "")
-        lines.append(f"{index}. `{name}` (composite)")
-        index += 1
-    if not total:
-        lines.append("Aktif alarm bulunamadı.")
-    return "\n".join(lines)
-
-
-def format_alarm_history(data: dict[str, Any]) -> str:
-    if data.get("error"):
-        return f"Alarm geçmişi alınamadı: {data['error']}"
-
-    items = data.get("history_items") or []
-    hours = data.get("hours")
-    region = data.get("region", AWS_REGION)
-    alarm_name = data.get("alarm_name")
-
-    if not items:
-        scope = f"`{alarm_name}`" if alarm_name else "tüm alarmlar"
-        window = f"son {hours} saat" if hours else "seçili aralık"
-        return f"{scope} için {window} içinde alarm geçişi bulunamadı ({region})."
-
-    lines = []
-    if alarm_name:
-        lines.append(f"**`{alarm_name}` alarm geçmişi** ({region}) — {len(items)} kayıt")
-    else:
-        window = f"son {hours} saat" if hours else "seçili aralık"
-        lines.append(f"**Alarm geçişleri** ({region}) — {window} — {len(items)} kayıt")
-    lines.append("")
-
-    for index, item in enumerate(items[:80], start=1):
-        name = item.get("AlarmName", "")
-        ts = item.get("Timestamp", "")
-        summary = item.get("HistorySummary", "")
-        if hasattr(ts, "isoformat"):
-            ts = iso_utc(ts.astimezone(timezone.utc))
-        elif isinstance(ts, str) and "T" not in ts:
-            ts = str(ts)
-        detail = summary or item.get("HistoryItemType", "")
-        lines.append(f"{index}. `{name}` — {detail}")
-        if ts:
-            lines[-1] += f" ({ts})"
-
-    if len(items) > 80:
-        lines.append(f"\n... ve {len(items) - 80} kayıt daha")
-    return "\n".join(lines)
-
-
-def format_analyze_metric(data: dict[str, Any]) -> str:
-    if data.get("error"):
-        return f"Metrik analizi başarısız: {data['error']}"
-    if data.get("message") and not data.get("datapoint_count"):
-        ns = data.get("namespace", "")
-        metric = data.get("metric_name", "")
-        prefix = f"**{ns} / {metric}**\n" if ns and metric else ""
-        return f"{prefix}{data['message']}"
-
-    ns = data.get("namespace", "")
-    metric = data.get("metric_name", "")
-    stat = data.get("statistic", "Average")
-    trend_map = {
-        "increasing": "artıyor",
-        "decreasing": "azalıyor",
-        "stable": "stabil",
-    }
-    trend = trend_map.get(str(data.get("trend", "")), data.get("trend", ""))
-    lines = [
-        f"**{ns} / {metric}** ({stat})",
-        f"- Veri noktası: {data.get('datapoint_count', 0)}",
-        f"- Min: {data.get('min', 0):.2f}",
-        f"- Max: {data.get('max', 0):.2f}",
-        f"- Ortalama: {data.get('average', 0):.2f}",
-        f"- Trend: {trend}",
-    ]
-    if data.get("first_timestamp"):
-        lines.append(f"- Başlangıç: {data['first_timestamp']}")
-    if data.get("last_timestamp"):
-        lines.append(f"- Bitiş: {data['last_timestamp']}")
-    return "\n".join(lines)
-
-
-def is_alarm_history_request(message: str) -> bool:
-    lowered = message.lower()
-    if re.search(r"\baktif\s+alarm", lowered) and not re.search(
-        r"tetik|geçmiş|history|son\s+\d+\s+saat", lowered
-    ):
-        return False
-    return bool(
-        re.search(
-            r"alarm.*tetik|tetiklenen\s+alarm|alarm\s+geçmiş|alarm\s+history|"
-            r"hangi\s+alarm|alarmların\s+tamam|tamamını\s+göster.*alarm|göster.*alarmların|"
-            r"son\s+\d+\s+saat.*alarm|alarm.*son\s+\d+\s+saat",
-            lowered,
-        )
-    )
-
-
-def is_active_alarms_request(message: str) -> bool:
-    lowered = message.lower()
-    return bool(re.search(r"\baktif\s+alarm", lowered)) and not is_alarm_history_request(message)
-
-
-def is_ecs_metric_request(message: str) -> bool:
-    lowered = message.lower()
-    if not re.search(r"\becs\b", lowered):
-        return False
-    return bool(re.search(r"cpu|memory|mem|metrik|metric|analiz", lowered))
-
-
-def ecs_metrics_from_message(message: str) -> list[tuple[str, str]]:
-    lowered = message.lower()
-    metrics: list[tuple[str, str]] = []
-    if re.search(r"cpu", lowered):
-        metrics.append(("AWS/ECS", "CPUUtilization"))
-    if re.search(r"memory|mem", lowered):
-        metrics.append(("AWS/ECS", "MemoryUtilization"))
-    if not metrics:
-        metrics.append(("AWS/ECS", "CPUUtilization"))
-    return metrics
-
-
-def format_log_search_results(data: dict[str, Any]) -> str:
-    """Format Insights search hits with real log group names only."""
-    if data.get("error"):
-        return f"Log araması başarısız: {data['error']}"
-
-    hours = data.get("hours", 1)
-    match_count = int(data.get("match_count") or 0)
-    groups_searched = int(data.get("log_groups_searched") or 0)
-    status = data.get("status", "Unknown")
-
-    rows: list[dict[str, str]] = []
-    default_group = str(data.get("log_group_name") or "")
-    for item in data.get("results") or []:
-        if isinstance(item, dict) and not any(
-            key in item for key in ("log_groups", "metric_alarms", "error_patterns")
-        ):
-            rows.append(
-                {
-                    "timestamp": str(item.get("timestamp", "")),
-                    "log_group": str(item.get("log_group") or default_group),
-                    "message": str(item.get("message", ""))[:300],
-                }
-            )
-        elif isinstance(item, list):
-            fields = {
-                str(field.get("field", "")): str(field.get("value", ""))
-                for field in item
-                if isinstance(field, dict)
-            }
-            rows.append(
-                {
-                    "timestamp": fields.get("@timestamp", ""),
-                    "log_group": fields.get("@log", fields.get("@logGroup", default_group)),
-                    "message": fields.get("@message", "")[:300],
-                }
-            )
-
-    all_groups = data.get("all_log_group_names") or data.get("log_group_names") or []
-    if data.get("log_group_name"):
-        all_groups = [str(data["log_group_name"])] + [g for g in all_groups if g != data["log_group_name"]]
-    if not rows:
-        sample = ", ".join(f"`{name}`" for name in all_groups[:12])
-        suffix = f"\n\nLog group: {sample}" if sample else ""
-        if data.get("log_group_name"):
-            return (
-                f"`{data['log_group_name']}` — son {hours} saat içinde eşleşen satır bulunamadı "
-                f"(durum: {status}).{suffix}"
-            )
-        return (
-            f"Son {hours} saat içinde {groups_searched} log grubunda arama yapıldı — "
-            f"eşleşen satır bulunamadı (durum: {status}).{suffix}"
-        )
-
-    by_group: dict[str, int] = {}
-    for row in rows:
-        log_group = (row.get("log_group") or "").strip() or "log-group-bilinmiyor"
-        by_group[log_group] = by_group.get(log_group, 0) + 1
-
-    lines = []
-    if data.get("log_group_name"):
-        lines.append(
-            f"**`{data['log_group_name']}` — son {hours} saat — {match_count} eşleşen satır** "
-            f"(durum: {status})"
-        )
-    else:
-        lines.append(
-            f"**Son {hours} saat — {match_count} eşleşen satır** "
-            f"({groups_searched} log grubunda arandı, durum: {status})"
-        )
-    lines.extend(["", "**Log gruplarına göre:**"])
-    for log_group, count in sorted(by_group.items(), key=lambda item: (-item[1], item[0])):
-        lines.append(f"- `{normalize_insights_log_group(log_group)}`: {count} satır")
-
-    lines.extend(["", "**Detay:**", ""])
-    display_limit = 80
-    for index, row in enumerate(rows[:display_limit], 1):
-        log_group = normalize_insights_log_group(row.get("log_group", ""))
-        timestamp = row.get("timestamp", "")
-        message = str(row.get("message", "")).replace("\n", " ")
-        lines.append(f"{index}. `{log_group}` — {timestamp}\n   {message}")
-
-    if data.get("truncated") or match_count > len(rows[:display_limit]):
-        remaining = max(0, match_count - min(len(rows), display_limit))
-        if remaining:
-            lines.append(f"\n... ve {remaining} satır daha (sorgu limiti içinde).")
-
-    if all_groups:
-        lines.append(f"\n**Aranan log grupları ({len(all_groups)}):**")
-        for name in all_groups[:40]:
-            lines.append(f"- `{normalize_insights_log_group(name)}`")
-        if len(all_groups) > 40:
-            lines.append(f"- ... ve {len(all_groups) - 40} grup daha")
-
-    return "\n".join(lines)
-
-
-def try_direct_tool_response(tool_name: str, tool_result: str) -> str | None:
-    """Format tool output on the server — real AWS data only, no LLM synthesis."""
-    try:
-        parsed = json.loads(tool_result)
-    except json.JSONDecodeError:
-        parsed = None
-
-    if tool_name in IMMEDIATE_FORMAT_TOOLS and isinstance(parsed, dict):
-        return format_log_search_results(parsed)
-
-    data = parse_log_groups_tool_result(tool_result)
-    if data is None:
-        data = parsed if isinstance(parsed, dict) else None
-    if not data:
-        return None
-    if tool_name == "describe_log_groups" and "log_groups" in data:
-        return format_log_groups_list(data)
-    if tool_name == "get_active_alarms":
-        return format_active_alarms_list(data)
-    if tool_name == "get_alarm_history":
-        return format_alarm_history(data)
-    if tool_name == "analyze_metric":
-        return format_analyze_metric(data)
-    return None
-
-
-def adjust_describe_log_groups_args(
-    _user_message: str, arguments: dict[str, Any]
-) -> dict[str, Any]:
-    """Clamp limits only; intent/keywords come from the LLM via prompt + tool schema."""
-    args = dict(arguments)
-    requested = int(args.get("max_items") or 50)
-    args["max_items"] = min(MAX_LOG_GROUPS_LIST, max(1, requested))
-    raw_keywords = args.get("log_group_name_keywords")
-    if isinstance(raw_keywords, list):
-        args["log_group_name_keywords"] = dedupe_search_keywords(raw_keywords)
-    return args
-
-
-def dedupe_search_keywords(keywords: list[str]) -> list[str]:
-    """Merge synonyms like 'container insights' + 'containerinsight' into one term."""
-    seen: set[str] = set()
-    unique: list[str] = []
-    for keyword in keywords:
-        term = (keyword or "").strip()
-        if not term:
-            continue
-        canonical = (
-            resolve_log_group_search_keyword(term)
-            if is_keyword_log_group_search(term)
-            else normalize_log_group_token(term)
-        )
-        if canonical in seen:
-            continue
-        seen.add(canonical)
-        unique.append(term)
-    return unique
-
-
-def summarize_message_for_history(content: str) -> str:
-    """Shrink huge list replies so the next turn is not polluted."""
-    if re.search(r"^\*\*\d+\s+log grubu\*\*", content, re.M):
-        count = re.search(r"\*\*(\d+)\s+log grubu\*\*", content)
-        n = count.group(1) if count else "?"
-        return f"[Önceki: {n} log grubu listelendi. Sonraki soru bağımsız değerlendir.]"
-    if re.search(r"^\*\*\d+\s+aktif alarm\*\*", content, re.M):
-        count = re.search(r"\*\*(\d+)\s+aktif alarm\*\*", content)
-        n = count.group(1) if count else "?"
-        return f"[Önceki: {n} aktif alarm listelendi.]"
-    if re.search(r"^\*\*Son \d+ saat — \d+ eşleşen satır\*\*", content, re.M):
-        count = re.search(r"— (\d+) eşleşen satır", content)
-        n = count.group(1) if count else "?"
-        return f"[Önceki: {n} log satırı arandı ve gerçek gruplarla listelendi.]"
-    return trim_message_content(content)
-
-
 def collect_log_group_names_for_search(
     logs_client,
     keywords: list[str],
@@ -948,7 +482,87 @@ def collect_log_group_names_for_search(
     return list(dict.fromkeys(names))[:max_groups]
 
 
-def format_insights_rows(results: list[Any], *, limit: int = 30) -> list[dict[str, str]]:
+def resolve_explicit_log_group_names(
+    logs_client,
+    names: list[str],
+    *,
+    max_groups: int = INSIGHTS_MAX_LOG_GROUPS,
+) -> list[str]:
+    """Resolve user-supplied log group labels to full CloudWatch log group paths."""
+    resolved: list[str] = []
+    for raw in names:
+        label = (raw or "").strip()
+        if not label:
+            continue
+        path = normalize_log_group_path(label)
+        if path.count("/") >= 3:
+            resolved.append(path)
+            continue
+        prefix = normalize_log_group_prefix_arg(label) or label
+        filtered, _ = _search_log_groups_by_keyword(
+            logs_client,
+            search_label=label,
+            prefix=prefix,
+            max_items=10,
+        )
+        exact = [
+            group["logGroupName"]
+            for group in filtered
+            if label.lower() in group.get("logGroupName", "").lower()
+        ]
+        if len(exact) == 1:
+            resolved.append(exact[0])
+            continue
+        if len(filtered) == 1:
+            resolved.append(filtered[0]["logGroupName"])
+            continue
+        for group in filtered[:3]:
+            name = group.get("logGroupName")
+            if name:
+                resolved.append(name)
+    return list(dict.fromkeys(resolved))[:max_groups]
+
+
+def resolve_search_log_groups(
+    logs_client,
+    *,
+    log_group_names: list[str] | None = None,
+    log_group_name_keywords: list[str] | None = None,
+    max_groups: int = INSIGHTS_MAX_LOG_GROUPS,
+) -> tuple[list[str], list[str], list[str]]:
+    """Return (group_names, keywords_tried, explicit_labels)."""
+    explicit = [n.strip() for n in (log_group_names or []) if n and n.strip()]
+    if explicit:
+        resolved = resolve_explicit_log_group_names(
+            logs_client, explicit, max_groups=max_groups
+        )
+        return resolved, explicit, explicit
+
+    keywords = dedupe_search_keywords(
+        [k.strip() for k in (log_group_name_keywords or DEFAULT_LOG_SEARCH_KEYWORDS) if k and k.strip()]
+    )
+    groups = collect_log_group_names_for_search(logs_client, keywords, max_groups=max_groups)
+    return groups, keywords, []
+
+
+def format_insights_timestamp(raw: str) -> str:
+    if not raw:
+        return ""
+    try:
+        ms = int(float(raw))
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S.%f"
+        )[:-3]
+    except (ValueError, OSError, OverflowError):
+        return raw
+
+
+def format_insights_rows(
+    results: list[Any],
+    *,
+    limit: int = 30,
+    max_message_chars: int | None = 240,
+) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for row in results[:limit]:
         if not isinstance(row, list):
@@ -958,22 +572,33 @@ def format_insights_rows(results: list[Any], *, limit: int = 30) -> list[dict[st
             for item in row
             if isinstance(item, dict)
         }
+        message = fields.get("@message", "")
+        if max_message_chars is not None:
+            message = message[:max_message_chars]
         rows.append(
             {
-                "timestamp": fields.get("@timestamp", ""),
+                "timestamp": format_insights_timestamp(fields.get("@timestamp", "")),
                 "log_group": normalize_insights_log_group(
                     fields.get("@log", fields.get("@logGroup", ""))
                 ),
-                "message": fields.get("@message", "")[:240],
+                "log_stream": fields.get("@logStream", ""),
+                "message": message,
+                "matches": fields.get("matches", ""),
             }
         )
     return rows
 
 
 def format_insights_rows_with_group(
-    results: list[Any], *, log_group_name: str, limit: int = 50
+    results: list[Any],
+    *,
+    log_group_name: str,
+    limit: int = 50,
+    max_message_chars: int | None = 240,
 ) -> list[dict[str, str]]:
-    rows = format_insights_rows(results, limit=limit)
+    rows = format_insights_rows(
+        results, limit=limit, max_message_chars=max_message_chars
+    )
     for row in rows:
         if not row.get("log_group"):
             row["log_group"] = log_group_name
@@ -1050,9 +675,142 @@ def wait_for_logs_query(logs_client, query_id: str) -> dict[str, Any]:
         response = logs_client.get_query_results(queryId=query_id)
         status = response.get("status")
         if status in {"Complete", "Failed", "Cancelled", "Timeout", "Unknown"}:
+            if status != "Complete":
+                logger.warning(
+                    "CloudWatch Insights query_id=%s finished with status=%s stats=%s",
+                    query_id,
+                    status,
+                    response.get("statistics", {}),
+                )
             return response
         time.sleep(LOGS_QUERY_POLL_INTERVAL)
-    return logs_client.get_query_results(queryId=query_id)
+    response = logs_client.get_query_results(queryId=query_id)
+    logger.warning(
+        "CloudWatch Insights query_id=%s timed out after %ss (last status=%s)",
+        query_id,
+        LOGS_QUERY_MAX_WAIT,
+        response.get("status"),
+    )
+    return response
+
+
+def insights_log_group_arn(log_group_name: str, region: str | None = None) -> str:
+    return (
+        f"arn:aws:logs:{region or AWS_REGION}:{AWS_ACCOUNT_ID}:log-group:{log_group_name}"
+    )
+
+
+def log_insights_query_start(
+    *,
+    log_group_names: list[str],
+    query_string: str,
+    start: int,
+    end: int,
+    context: str,
+) -> None:
+    window_sec = max(0, end - start)
+    start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
+    end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
+    for group in log_group_names:
+        logger.info(
+            "CloudWatch Insights START [%s]\n"
+            'SOURCE "%s" START=-%ds END=0s | utc %s -> %s\n%s',
+            context,
+            insights_log_group_arn(group),
+            window_sec,
+            iso_utc(start_dt),
+            iso_utc(end_dt),
+            query_string.strip(),
+        )
+
+
+def log_insights_query_result(
+    *,
+    context: str,
+    query_id: str,
+    status: str,
+    record_count: int,
+    elapsed_s: float,
+    statistics: dict[str, Any] | None = None,
+    results: list[Any] | None = None,
+) -> None:
+    stats = statistics or {}
+    sample = ""
+    if results:
+        sample = json.dumps(results[:3], default=str, ensure_ascii=False)[:800]
+    logger.info(
+        "CloudWatch Insights RESULT [%s] query_id=%s status=%s records=%d "
+        "elapsed=%.2fs bytes_scanned=%s records_matched=%s sample=%s",
+        context,
+        query_id,
+        status,
+        record_count,
+        elapsed_s,
+        stats.get("bytesScanned", "?"),
+        stats.get("recordsMatched", "?"),
+        sample or "<empty>",
+    )
+
+
+def execute_insights_query(
+    logs_client,
+    *,
+    log_group_names: list[str] | None = None,
+    log_group_name: str | None = None,
+    query_string: str,
+    start: int,
+    end: int,
+    context: str = "agent",
+) -> dict[str, Any]:
+    groups = list(log_group_names or [])
+    if log_group_name:
+        groups = [log_group_name]
+    if not groups:
+        return {"status": "Failed", "results": [], "statistics": {}}
+
+    log_insights_query_start(
+        log_group_names=groups,
+        query_string=query_string,
+        start=start,
+        end=end,
+        context=context,
+    )
+    started = time.time()
+    kwargs: dict[str, Any] = {
+        "startTime": start,
+        "endTime": end,
+        "queryString": query_string,
+    }
+    if len(groups) == 1:
+        kwargs["logGroupName"] = groups[0]
+    else:
+        kwargs["logGroupNames"] = groups
+
+    try:
+        response = logs_client.start_query(**kwargs)
+    except ClientError as exc:
+        logger.exception(
+            "CloudWatch Insights ERROR [%s] groups=%s query=%s",
+            context,
+            groups,
+            query_string.strip(),
+        )
+        raise
+
+    query_id = response["queryId"]
+    completed = wait_for_logs_query(logs_client, query_id)
+    results = completed.get("results") or []
+    log_insights_query_result(
+        context=context,
+        query_id=query_id,
+        status=str(completed.get("status", "Unknown")),
+        record_count=len(results),
+        elapsed_s=time.time() - started,
+        statistics=completed.get("statistics"),
+        results=results,
+    )
+    completed["query_id"] = query_id
+    return completed
 
 
 # ---------------------------------------------------------------------------
@@ -1131,10 +889,18 @@ def describe_log_groups(
     if not keywords and log_group_name_prefix:
         keywords = [log_group_name_prefix.strip()]
 
+    logger.info(
+        "describe_log_groups START keywords=%s prefix=%r max_items=%d region=%s",
+        keywords or ["<all>"],
+        log_group_name_prefix,
+        max_items,
+        region or AWS_REGION,
+    )
+
     if not keywords:
         log_groups = fetch_log_groups(logs_client, max_items=max_items)
         slim_groups = [slim_log_group(lg) for lg in log_groups]
-        return {
+        result = {
             "region": region or AWS_REGION,
             "count": len(slim_groups),
             "log_groups": slim_groups,
@@ -1146,6 +912,12 @@ def describe_log_groups(
                 else None
             ),
         }
+        logger.info(
+            "describe_log_groups RESULT count=%d sample=%s",
+            result["count"],
+            [g.get("logGroupName") for g in slim_groups[:10]],
+        )
+        return result
 
     if len(keywords) == 1:
         search_label = keywords[0]
@@ -1167,13 +939,22 @@ def describe_log_groups(
                 f"'{search_label}' ile eşleşen log grupları listelendi "
                 "(yaklaşık/eksik yazım desteklenir)."
             )
-        return {
+        slim = [slim_log_group(lg) for lg in filtered]
+        result = {
             "region": region or AWS_REGION,
             "count": len(filtered),
-            "log_groups": [slim_log_group(lg) for lg in filtered],
+            "log_groups": slim,
             "fallback_contains_used": fallback_applied,
             "message": message,
         }
+        logger.info(
+            "describe_log_groups RESULT keyword=%r count=%d fallback=%s sample=%s",
+            search_label,
+            result["count"],
+            fallback_applied,
+            [g.get("logGroupName") for g in slim[:10]],
+        )
+        return result
 
     merged: list[dict[str, Any]] = []
     fallback_applied = False
@@ -1201,14 +982,23 @@ def describe_log_groups(
             "Yazım varyasyonları ve /aws/ prefix'leri denendi."
         )
 
-    return {
+    slim_merged = [slim_log_group(lg) for lg in merged]
+    result = {
         "region": region or AWS_REGION,
         "count": len(merged),
-        "log_groups": [slim_log_group(lg) for lg in merged],
+        "log_groups": slim_merged,
         "fallback_contains_used": fallback_applied,
         "message": message,
         "matched_keywords": keywords,
     }
+    logger.info(
+        "describe_log_groups RESULT keywords=%s count=%d fallback=%s sample=%s",
+        keywords,
+        result["count"],
+        fallback_applied,
+        [g.get("logGroupName") for g in slim_merged[:10]],
+    )
+    return result
 
 
 @mcp.tool(name="query_log_group", description=CLOUDWATCH_TOOLS["query_log_group"])
@@ -1217,53 +1007,134 @@ def query_log_group(
         str,
         Field(description="Full CloudWatch log group path, e.g. /aws/apigateway/my-api/access-logs"),
     ],
-    hours: Annotated[int, Field(description="Lookback window in hours. Default 1.")] = 1,
+    hours: Annotated[
+        int,
+        Field(
+            description=(
+                "Lookback window in hours when start/end omitted. Default 1 only if the user "
+                "did not mention a time range. MUST match user phrasing: 'son 12 saat' → 12, "
+                "'son 3 gün' → 72, 'dün' → 24."
+            ),
+        ),
+    ] = 1,
+    start_time: Annotated[
+        Optional[str],
+        Field(description="ISO-8601 UTC start. Use with end_time for comparisons or exact windows."),
+    ] = None,
+    end_time: Annotated[
+        Optional[str],
+        Field(description="ISO-8601 UTC end. Use with start_time."),
+    ] = None,
     search_filter: Annotated[
         LogSearchFilter,
-        Field(description="Preset Insights filter for errors or HTTP status codes."),
+        Field(description="Preset Insights filter for errors, 2xx, or HTTP status codes."),
     ] = "errors",
+    tenant_filter: Annotated[
+        Optional[str],
+        Field(
+            description=(
+                "Scope to one tenant/customer slug in access logs "
+                "(matches tenantDomain, tenantId, or path segment — e.g. bozkurteradev)."
+            ),
+        ),
+    ] = None,
+    response_mode: Annotated[
+        LogResponseMode,
+        Field(
+            description=(
+                "summary=count only; detail=CloudWatch-style log lines; "
+                "analysis=aggregated breakdown and likely causes from real log data."
+            ),
+        ),
+    ] = "detail",
+    max_result_lines: Annotated[int, Field(description="Max log lines when response_mode=detail.")] = 100,
     region: Annotated[Optional[str], Field(description="AWS region.")] = None,
 ) -> dict[str, Any]:
     logs_client = get_client("logs", region)
     log_group_name = normalize_log_group_path(log_group_name)
-    hours = min(24, max(1, int(hours)))
-    end_dt = utc_now()
-    start_dt = end_dt - timedelta(hours=hours)
-    query_string = LOG_SEARCH_QUERY_PRESETS[search_filter]
+    try:
+        start_dt, end_dt, hours_out = resolve_query_time_window(
+            hours=hours,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    except ValueError as exc:
+        return {
+            "error": str(exc),
+            "log_group_name": log_group_name,
+            "match_count": 0,
+            "results": [],
+        }
+
+    query_string = resolve_log_search_query(
+        search_filter,
+        rank_by_log_group=(response_mode in {"summary", "count_only"}),
+        line_limit=min(200, max(1, int(max_result_lines))),
+        rank_limit=1,
+        tenant=(tenant_filter or "").strip() or None,
+    )
+    start = to_epoch_seconds(start_dt)
+    end = to_epoch_seconds(end_dt)
 
     try:
-        response = logs_client.start_query(
-            logGroupName=log_group_name,
-            startTime=to_epoch_seconds(start_dt),
-            endTime=to_epoch_seconds(end_dt),
-            queryString=query_string,
+        completed = execute_insights_query(
+            logs_client,
+            log_group_name=log_group_name,
+            query_string=query_string,
+            start=start,
+            end=end,
+            context=f"query_log_group:{search_filter}",
         )
     except ClientError as exc:
         return {
             "error": str(exc),
             "log_group_name": log_group_name,
-            "hours": hours,
+            "hours": hours_out,
+            "start_time": iso_utc(start_dt),
+            "end_time": iso_utc(end_dt),
             "search_filter": search_filter,
+            "query_string": query_string,
             "match_count": 0,
             "results": [],
         }
 
-    completed = wait_for_logs_query(logs_client, response["queryId"])
     raw_results = completed.get("results", [])
+    rank_results = response_mode in {"summary", "count_only"}
+    limit = 1 if rank_results else min(200, max(1, int(max_result_lines)))
+    if response_mode == "analysis":
+        limit = min(200, max(50, int(max_result_lines)))
     formatted = format_insights_rows_with_group(
-        raw_results, log_group_name=log_group_name, limit=50
+        raw_results,
+        log_group_name=log_group_name,
+        limit=limit,
+        max_message_chars=None if response_mode in {"detail", "analysis"} else 240,
     )
+    if rank_results and formatted:
+        try:
+            match_total = int(float(formatted[0].get("matches") or len(raw_results)))
+        except ValueError:
+            match_total = len(raw_results)
+    else:
+        match_total = len(raw_results)
     return {
         "status": completed.get("status"),
         "region": region or AWS_REGION,
         "log_group_name": log_group_name,
-        "hours": hours,
+        "hours": hours_out,
+        "start_time": iso_utc(start_dt),
+        "end_time": iso_utc(end_dt),
         "search_filter": search_filter,
+        "tenant_filter": (tenant_filter or "").strip() or None,
+        "response_mode": response_mode,
+        "query_string": query_string,
+        "query_id": completed.get("query_id"),
         "log_groups_searched": 1,
         "all_log_group_names": [log_group_name],
-        "match_count": len(raw_results),
+        "match_count": match_total,
+        "total_matches": match_total,
+        "max_result_lines": limit,
         "results": formatted,
-        "truncated": len(raw_results) > 50,
+        "truncated": len(raw_results) > limit,
     }
 
 
@@ -1376,57 +1247,170 @@ def execute_log_insights_query(
 
 @mcp.tool(name="search_logs_across_groups", description=CLOUDWATCH_TOOLS["search_logs_across_groups"])
 def search_logs_across_groups(
-    query_string: Annotated[
-        str,
+    search_filter: Annotated[
+        Optional[LogSearchFilter],
         Field(
             description=(
-                "CloudWatch Logs Insights query. Examples: "
-                "400 → filter @message like /(?i)(\\b400\\b|status.?code.?400)/; "
-                "5XX → filter @message like /(?i)(\\b5\\d{2}\\b|status.?code.?5\\d{2})/"
+                "Preset filter: errors, http_2xx, http_400, http_401, http_403, http_404, "
+                "http_500, http_500_backend, http_502, http_503, http_504, http_5xx. "
+                "Use http_500_backend for integration/backend 500 only (excludes authorizer denials)."
+            ),
+        ),
+    ] = None,
+    query_string: Annotated[
+        Optional[str],
+        Field(
+            description=(
+                "Custom Insights query when search_filter is omitted. "
+                "For 2xx/success use HTTP 2xx patterns — NOT the errors preset."
             )
         ),
-    ],
-    hours: Annotated[int, Field(description="Lookback window in hours. Default 1.")] = 1,
+    ] = None,
+    hours: Annotated[
+        int,
+        Field(
+            description=(
+                "Lookback hours when start_time/end_time omitted. Default 1 only if the user "
+                "did not mention a time range. MUST match user phrasing: 'son 12 saat' → 12, "
+                "'son 3 gün' → 72, 'dün' → 24."
+            ),
+        ),
+    ] = 1,
+    start_time: Annotated[
+        Optional[str],
+        Field(description="ISO-8601 UTC start for exact windows and comparisons."),
+    ] = None,
+    end_time: Annotated[
+        Optional[str],
+        Field(description="ISO-8601 UTC end for exact windows and comparisons."),
+    ] = None,
+    period_label: Annotated[
+        Optional[str],
+        Field(description="Human label for this window in comparison replies, e.g. 'Today' / 'Dün'."),
+    ] = None,
+    response_mode: Annotated[
+        LogResponseMode,
+        Field(
+            description=(
+                "summary=count per log group system-wide (e.g. all 500s); "
+                "count_only=counts for selected groups only, no log lines; "
+                "detail=full timestamp/message lines (use for A+B detailed); "
+                "analysis=breakdown and likely causes from matched lines."
+            ),
+        ),
+    ] = "detail",
+    rank_by_log_group: Annotated[
+        bool,
+        Field(
+            description=(
+                "Deprecated — use response_mode=summary or count_only. "
+                "When true, returns stats count() by @log."
+            ),
+        ),
+    ] = False,
     max_result_lines: Annotated[
         int,
-        Field(description="Max matching log lines to return. Use 100–200 for detailed requests."),
+        Field(description="Max log lines (detail) or max groups (summary/count_only)."),
     ] = 50,
+    log_group_names: Annotated[
+        Optional[list[str]],
+        Field(
+            description=(
+                "Specific log groups when user named multiple exact paths or labels. "
+                "Do NOT use keywords here when user gave one full path — use query_log_group instead. "
+                "Examples: ['/aws/apigateway/x/access', '/aws/lambda/y']. "
+                "Omit for system-wide default search."
+            ),
+        ),
+    ] = None,
     log_group_name_keywords: Annotated[
         Optional[list[str]],
         Field(
             description=(
-                "Optional log group filters. If omitted, searches containerinsights, "
-                "api-gateway, alb, lambda, cloudfront."
+                "Fuzzy filters for vague scope only (e.g. 'api-gateway', 'lambda'). "
+                "Never use when user already provided the exact full log group path with '/'."
             )
         ),
+    ] = None,
+    tenant_filter: Annotated[
+        Optional[str],
+        Field(description="Tenant/customer slug filter for access logs (tenantDomain, path, tenantId)."),
     ] = None,
     region: Annotated[Optional[str], Field(description="AWS region.")] = None,
 ) -> dict[str, Any]:
     logs_client = get_client("logs", region)
-    keywords = dedupe_search_keywords(
-        [k.strip() for k in (log_group_name_keywords or DEFAULT_LOG_SEARCH_KEYWORDS) if k and k.strip()]
+    mode: LogResponseMode = response_mode
+    if rank_by_log_group and mode == "detail":
+        mode = "summary"
+
+    group_names, keywords, explicit_labels = resolve_search_log_groups(
+        logs_client,
+        log_group_names=log_group_names,
+        log_group_name_keywords=log_group_name_keywords,
     )
-    group_names = collect_log_group_names_for_search(logs_client, keywords)
     if not group_names:
         return {
             "error": "Arama için uygun log group bulunamadı.",
             "keywords_tried": keywords,
+            "requested_log_group_names": explicit_labels,
             "match_count": 0,
             "results": [],
         }
 
-    hours = min(24, max(1, int(hours)))
-    end_dt = utc_now()
-    start_dt = end_dt - timedelta(hours=hours)
+    rank_results = mode in {"summary", "count_only"}
+    if search_filter:
+        resolved_query = resolve_log_search_query(
+            search_filter,
+            rank_by_log_group=rank_results,
+            line_limit=min(200, max(1, int(max_result_lines))),
+            rank_limit=min(50, max(len(group_names), int(max_result_lines))),
+            tenant=(tenant_filter or "").strip() or None,
+        )
+    elif query_string and query_string.strip():
+        resolved_query = query_string.strip()
+        if rank_results and "stats count()" not in resolved_query.lower():
+            filter_body = resolved_query
+            if filter_body.startswith("fields "):
+                filter_body = "\n".join(filter_body.split("\n")[1:])
+            resolved_query = (
+                f"fields @log\n{filter_body.rstrip()}\n"
+                f"| stats count() as matches by @log\n"
+                f"| sort matches desc\n"
+                f"| limit {min(50, max(1, int(max_result_lines)))}"
+            )
+    else:
+        return {
+            "error": "search_filter veya query_string gerekli.",
+            "match_count": 0,
+            "results": [],
+        }
+
+    try:
+        start_dt, end_dt, hours_out = resolve_query_time_window(
+            hours=hours,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    except ValueError as exc:
+        return {
+            "error": str(exc),
+            "keywords_tried": keywords,
+            "requested_log_group_names": explicit_labels,
+            "match_count": 0,
+            "results": [],
+        }
+
     start = to_epoch_seconds(start_dt)
     end = to_epoch_seconds(end_dt)
 
     try:
-        response = logs_client.start_query(
-            logGroupNames=group_names,
-            startTime=start,
-            endTime=end,
-            queryString=query_string,
+        completed = execute_insights_query(
+            logs_client,
+            log_group_names=group_names,
+            query_string=resolved_query,
+            start=start,
+            end=end,
+            context=f"search_logs_across_groups:{mode}",
         )
     except ClientError as exc:
         return {
@@ -1434,24 +1418,56 @@ def search_logs_across_groups(
             "log_groups_searched": len(group_names),
             "log_group_names": group_names[:10],
             "keywords_tried": keywords,
+            "requested_log_group_names": explicit_labels,
+            "search_filter": search_filter,
+            "query_string": resolved_query,
+            "response_mode": mode,
+            "rank_by_log_group": rank_results,
+            "period_label": period_label,
             "match_count": 0,
             "results": [],
         }
 
-    completed = wait_for_logs_query(logs_client, response["queryId"])
     results = completed.get("results", [])
     max_lines = min(200, max(1, int(max_result_lines)))
-    formatted = format_insights_rows(results, limit=max_lines)
+    formatted = format_insights_rows(
+        results,
+        limit=max_lines if not rank_results else 50,
+        max_message_chars=None
+        if mode in {"detail", "analysis"} and not rank_results
+        else 240,
+    )
+    total_matches = 0
+    if rank_results:
+        for row in formatted:
+            try:
+                total_matches += int(float(row.get("matches") or 0))
+            except ValueError:
+                continue
+    else:
+        total_matches = len(results)
+
     return {
         "status": completed.get("status"),
         "region": region or AWS_REGION,
-        "hours": hours,
+        "hours": hours_out,
+        "start_time": iso_utc(start_dt),
+        "end_time": iso_utc(end_dt),
+        "period_label": period_label,
+        "response_mode": mode,
+        "rank_by_log_group": rank_results,
         "log_groups_searched": len(group_names),
         "all_log_group_names": group_names,
         "log_group_names": group_names[:15],
+        "requested_log_group_names": explicit_labels,
         "keywords_tried": keywords,
-        "query_string": query_string,
-        "match_count": len(results),
+        "search_filter": search_filter,
+        "tenant_filter": (tenant_filter or "").strip() or None,
+        "query_string": resolved_query,
+        "query_id": completed.get("query_id"),
+        "match_count": total_matches if rank_results else len(results),
+        "total_matches": total_matches,
+        "max_result_lines": max_lines,
         "results": formatted,
         "truncated": len(results) > max_lines,
     }
@@ -1752,502 +1768,6 @@ def analyze_metric(
 logger.info("CloudWatch MCP tools registered (boto3)")
 
 # ---------------------------------------------------------------------------
-# Agent helpers
-# ---------------------------------------------------------------------------
-
-_openai_tools_cache: list[dict[str, Any]] | None = None
-_llm_client = AsyncOpenAI(
-    base_url=VLLM_BASE_URL,
-    api_key="EMPTY",
-    timeout=REQUEST_TIMEOUT_SECONDS,
-)
-
-
-def _mcp_tool_to_openai(tool: Tool) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": CLOUDWATCH_TOOLS.get(tool.name, tool.description or ""),
-            "parameters": tool.inputSchema,
-        },
-    }
-
-
-async def get_openai_tools() -> list[dict[str, Any]]:
-    global _openai_tools_cache
-    if _openai_tools_cache is None:
-        tools = await mcp.list_tools()
-        _openai_tools_cache = [
-            _mcp_tool_to_openai(tool)
-            for tool in tools
-            if tool.name in ALLOWED_TOOL_NAMES
-        ]
-        logger.info("Loaded %d CloudWatch tools for agent", len(_openai_tools_cache))
-    return _openai_tools_cache
-
-
-def serialize_tool_result(result: CallToolResult) -> str:
-    if result.structuredContent is not None:
-        return json.dumps(result.structuredContent, default=str)
-
-    if not result.content:
-        return "Tool returned no content."
-
-    parts: list[str] = []
-    for block in result.content:
-        text = getattr(block, "text", None)
-        parts.append(text if text is not None else str(block))
-
-    content = "\n".join(parts)
-    if len(content) > MAX_TOOL_RESULT_CHARS:
-        content = (
-            content[:MAX_TOOL_RESULT_CHARS]
-            + f"\n...[truncated {len(content) - MAX_TOOL_RESULT_CHARS} chars]"
-        )
-    if result.isError:
-        return f"Tool error: {content}"
-    return content
-
-
-class CloudWatchMcpSession:
-    def __init__(self) -> None:
-        self._session_cm = None
-        self.session: ClientSession | None = None
-
-    async def __aenter__(self) -> "CloudWatchMcpSession":
-        self._session_cm = create_connected_server_and_client_session(mcp._mcp_server)
-        self.session = await self._session_cm.__aenter__()
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        if self._session_cm is not None:
-            await self._session_cm.__aexit__(exc_type, exc, tb)
-        self.session = None
-
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        if self.session is None:
-            raise RuntimeError("MCP session is not initialized")
-        if name not in ALLOWED_TOOL_NAMES:
-            raise ValueError(f"Tool '{name}' is not allowed. Use one of: {sorted(ALLOWED_TOOL_NAMES)}")
-
-        logger.info("Calling tool %s", name)
-        result = await self.session.call_tool(name, arguments)
-        return serialize_tool_result(result)
-
-
-def humanize_response(text: str) -> str:
-    """Convert accidental JSON-only LLM replies into readable text for the UI."""
-    if not text:
-        return ""
-    stripped = text.strip()
-    if not (stripped.startswith("{") or stripped.startswith("[")):
-        return text
-
-    try:
-        data = json.loads(stripped)
-    except json.JSONDecodeError:
-        return text
-
-    if isinstance(data, dict):
-        if data.get("error"):
-            return str(data["error"])
-
-        log_groups = data.get("log_groups") or data.get("logGroups")
-        if isinstance(log_groups, list):
-            if not log_groups:
-                return str(data.get("message") or "Eşleşen log group bulunamadı.")
-            lines = ["Bulunan log grupları:"]
-            for item in log_groups:
-                if isinstance(item, dict):
-                    name = item.get("logGroupName", "")
-                    retention = item.get("retentionInDays")
-                    suffix = f" (retention: {retention} gün)" if retention else ""
-                    lines.append(f"- {name}{suffix}")
-                else:
-                    lines.append(f"- {item}")
-            if data.get("message"):
-                lines.insert(1, str(data["message"]))
-            return "\n".join(lines)
-
-        metric_alarms = data.get("metric_alarms") or data.get("metricAlarms")
-        if isinstance(metric_alarms, list):
-            if not metric_alarms:
-                return "Aktif alarm bulunamadı."
-            lines = ["Aktif alarmlar:"]
-            for alarm in metric_alarms[:20]:
-                if isinstance(alarm, dict):
-                    lines.append(f"- {alarm.get('AlarmName', alarm)}")
-            return "\n".join(lines)
-
-        if data.get("message") and len(data) <= 4:
-            return str(data["message"])
-
-    return text
-
-
-async def run_log_group_list_request(
-    message: str,
-    history: list[dict[str, Any]] | None,
-    mcp_session: "CloudWatchMcpSession",
-) -> dict[str, Any] | None:
-    if not should_list_log_groups(message, history):
-        return None
-
-    tool_args = adjust_describe_log_groups_args(message, {"max_items": MAX_LOG_GROUPS_LIST})
-    try:
-        tool_result = await mcp_session.call_tool("describe_log_groups", tool_args)
-    except Exception as exc:
-        logger.exception("describe_log_groups list request failed")
-        return {
-            "response": f"Log group listesi alınamadı: {exc}",
-            "tool_calls": [{"name": "describe_log_groups", "arguments": tool_args}],
-            "iterations": 1,
-        }
-
-    direct = try_direct_tool_response("describe_log_groups", tool_result)
-    return {
-        "response": direct or tool_result,
-        "tool_calls": [{"name": "describe_log_groups", "arguments": tool_args}],
-        "iterations": 1,
-    }
-
-
-async def run_http_status_search(
-    message: str,
-    mcp_session: "CloudWatchMcpSession",
-) -> dict[str, Any] | None:
-    if not is_http_status_search(message):
-        return None
-
-    search_filter = infer_log_search_filter(message)
-    tool_args = {
-        "query_string": LOG_SEARCH_QUERY_PRESETS[search_filter],
-        "hours": parse_hours_from_message(message),
-        "max_result_lines": 50,
-    }
-    try:
-        tool_result = await mcp_session.call_tool("search_logs_across_groups", tool_args)
-    except Exception as exc:
-        logger.exception("search_logs_across_groups status search failed")
-        return {
-            "response": f"HTTP durum araması başarısız: {exc}",
-            "tool_calls": [{"name": "search_logs_across_groups", "arguments": tool_args}],
-            "iterations": 1,
-        }
-
-    direct = try_direct_tool_response("search_logs_across_groups", tool_result)
-    return {
-        "response": direct or tool_result,
-        "tool_calls": [{"name": "search_logs_across_groups", "arguments": tool_args}],
-        "iterations": 1,
-    }
-
-
-async def run_named_log_group_query(
-    message: str,
-    mcp_session: "CloudWatchMcpSession",
-) -> dict[str, Any] | None:
-    if not is_named_log_content_query(message):
-        return None
-
-    paths = extract_log_group_paths(message)
-    if not paths:
-        return None
-
-    tool_args = {
-        "log_group_name": paths[0],
-        "hours": parse_hours_from_message(message),
-        "search_filter": infer_log_search_filter(message),
-    }
-    try:
-        tool_result = await mcp_session.call_tool("query_log_group", tool_args)
-    except Exception as exc:
-        logger.exception("query_log_group fallback failed")
-        return {
-            "response": f"Log sorgusu başarısız: {exc}",
-            "tool_calls": [{"name": "query_log_group", "arguments": tool_args}],
-            "iterations": 1,
-        }
-
-    direct = try_direct_tool_response("query_log_group", tool_result)
-    return {
-        "response": direct or tool_result,
-        "tool_calls": [{"name": "query_log_group", "arguments": tool_args}],
-        "iterations": 1,
-    }
-
-
-async def run_active_alarms_request(
-    message: str,
-    mcp_session: "CloudWatchMcpSession",
-) -> dict[str, Any] | None:
-    if not is_active_alarms_request(message):
-        return None
-
-    tool_args = {"max_items": 100}
-    try:
-        tool_result = await mcp_session.call_tool("get_active_alarms", tool_args)
-    except Exception as exc:
-        logger.exception("get_active_alarms fallback failed")
-        return {
-            "response": f"Aktif alarmlar alınamadı: {exc}",
-            "tool_calls": [{"name": "get_active_alarms", "arguments": tool_args}],
-            "iterations": 1,
-        }
-
-    direct = try_direct_tool_response("get_active_alarms", tool_result)
-    return {
-        "response": direct or tool_result,
-        "tool_calls": [{"name": "get_active_alarms", "arguments": tool_args}],
-        "iterations": 1,
-    }
-
-
-async def run_alarm_history_request(
-    message: str,
-    mcp_session: "CloudWatchMcpSession",
-) -> dict[str, Any] | None:
-    if not is_alarm_history_request(message):
-        return None
-
-    hours = parse_hours_from_message(message)
-    end_dt = utc_now()
-    start_dt = end_dt - timedelta(hours=hours)
-    tool_args = {
-        "start_time": iso_utc(start_dt),
-        "end_time": iso_utc(end_dt),
-        "max_records": 100,
-    }
-    try:
-        tool_result = await mcp_session.call_tool("get_alarm_history", tool_args)
-    except Exception as exc:
-        logger.exception("get_alarm_history fallback failed")
-        return {
-            "response": f"Alarm geçmişi alınamadı: {exc}",
-            "tool_calls": [{"name": "get_alarm_history", "arguments": tool_args}],
-            "iterations": 1,
-        }
-
-    direct = try_direct_tool_response("get_alarm_history", tool_result)
-    return {
-        "response": direct or tool_result,
-        "tool_calls": [{"name": "get_alarm_history", "arguments": tool_args}],
-        "iterations": 1,
-    }
-
-
-async def run_ecs_metric_analysis(
-    message: str,
-    mcp_session: "CloudWatchMcpSession",
-) -> dict[str, Any] | None:
-    if not is_ecs_metric_request(message):
-        return None
-
-    hours = parse_hours_from_message(message)
-    end_dt = utc_now()
-    start_dt = end_dt - timedelta(hours=hours)
-    metrics = ecs_metrics_from_message(message)
-    tool_calls: list[dict[str, Any]] = []
-    sections: list[str] = []
-
-    for namespace, metric_name in metrics:
-        tool_args = {
-            "namespace": namespace,
-            "metric_name": metric_name,
-            "start_time": iso_utc(start_dt),
-            "end_time": iso_utc(end_dt),
-            "statistic": "Average",
-            "period": 300,
-        }
-        try:
-            tool_result = await mcp_session.call_tool("analyze_metric", tool_args)
-        except Exception as exc:
-            logger.exception("analyze_metric fallback failed for %s/%s", namespace, metric_name)
-            sections.append(f"**{namespace} / {metric_name}** — analiz başarısız: {exc}")
-            tool_calls.append({"name": "analyze_metric", "arguments": tool_args})
-            continue
-
-        tool_calls.append({"name": "analyze_metric", "arguments": tool_args})
-        direct = try_direct_tool_response("analyze_metric", tool_result)
-        sections.append(direct or tool_result)
-
-    return {
-        "response": "\n\n".join(sections),
-        "tool_calls": tool_calls,
-        "iterations": 1,
-    }
-
-
-async def run_agent(
-    message: str,
-    conversation_history: list[dict[str, Any]] | None = None,
-    *,
-    _retry_without_history: bool = False,
-) -> dict[str, Any]:
-    tools = await get_openai_tools()
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    trimmed_history = [] if _retry_without_history else trim_conversation_history(conversation_history)
-    if trimmed_history:
-        messages.extend(trimmed_history)
-
-    messages.append({"role": "user", "content": message})
-    tool_calls_made: list[dict[str, Any]] = []
-    last_direct_format: tuple[str, str] | None = None
-
-    async with CloudWatchMcpSession() as mcp_session:
-        named_query = await run_named_log_group_query(message, mcp_session)
-        if named_query is not None:
-            return named_query
-
-        list_query = await run_log_group_list_request(message, trimmed_history, mcp_session)
-        if list_query is not None:
-            return list_query
-
-        status_query = await run_http_status_search(message, mcp_session)
-        if status_query is not None:
-            return status_query
-
-        alarm_history = await run_alarm_history_request(message, mcp_session)
-        if alarm_history is not None:
-            return alarm_history
-
-        active_alarms = await run_active_alarms_request(message, mcp_session)
-        if active_alarms is not None:
-            return active_alarms
-
-        ecs_metrics = await run_ecs_metric_analysis(message, mcp_session)
-        if ecs_metrics is not None:
-            return ecs_metrics
-
-        for iteration in range(MAX_TOOL_ITERATIONS):
-            try:
-                response = await _llm_client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    max_tokens=LLM_MAX_TOKENS,
-                    temperature=LLM_TEMPERATURE,
-                )
-            except BadRequestError as exc:
-                err_text = str(exc).lower()
-                if (
-                    not _retry_without_history
-                    and ("context length" in err_text or "maximum context" in err_text)
-                ):
-                    logger.warning("Context length exceeded; retrying without history")
-                    return await run_agent(
-                        message,
-                        conversation_history,
-                        _retry_without_history=True,
-                    )
-                if "context length" in err_text or "maximum context" in err_text:
-                    return {
-                        "response": (
-                            "Sohbet geçmişi çok uzun olduğu için model yanıt veremedi. "
-                            "Sol panelden **Yeni** ile yeni sohbet başlatıp tekrar dene."
-                        ),
-                        "tool_calls": tool_calls_made,
-                        "iterations": iteration + 1,
-                    }
-                raise
-            assistant_message = response.choices[0].message
-
-            if not assistant_message.tool_calls:
-                content = (assistant_message.content or "").strip()
-                if not content:
-                    named_query = await run_named_log_group_query(message, mcp_session)
-                    if named_query is not None:
-                        return named_query
-
-                last_tool_name = tool_calls_made[-1]["name"] if tool_calls_made else None
-                if (
-                    last_direct_format is not None
-                    and last_tool_name in DIRECT_FORMAT_TOOLS
-                ):
-                    direct_name, direct_result = last_direct_format
-                    if direct_name == last_tool_name:
-                        direct = try_direct_tool_response(direct_name, direct_result)
-                        if direct is not None:
-                            return {
-                                "response": direct,
-                                "tool_calls": tool_calls_made,
-                                "iterations": iteration + 1,
-                            }
-                return {
-                    "response": humanize_response(assistant_message.content or ""),
-                    "tool_calls": tool_calls_made,
-                    "iterations": iteration + 1,
-                }
-
-            messages.append(assistant_message.model_dump(exclude_none=True))
-
-            for tool_call in assistant_message.tool_calls:
-                tool_name = tool_call.function.name
-                try:
-                    arguments = json.loads(tool_call.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    arguments = {}
-
-                if tool_name == "describe_log_groups":
-                    arguments = adjust_describe_log_groups_args(message, arguments)
-                    if arguments.get("log_group_name_prefix"):
-                        arguments["log_group_name_prefix"] = normalize_log_group_prefix_arg(
-                            arguments["log_group_name_prefix"]
-                        )
-
-                try:
-                    tool_result = await mcp_session.call_tool(tool_name, arguments)
-                except Exception as exc:
-                    logger.exception("Tool %s failed", tool_name)
-                    tool_result = json.dumps(
-                        {"error": str(exc), "tool": tool_name},
-                        ensure_ascii=False,
-                    )
-
-                if tool_name in DIRECT_FORMAT_TOOLS:
-                    last_direct_format = (tool_name, tool_result)
-                else:
-                    last_direct_format = None
-                tool_calls_made.append(
-                    {
-                        "name": tool_name,
-                        "arguments": arguments,
-                        "result_preview": tool_result[:500],
-                    }
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": compact_tool_result_for_context(tool_name, tool_result),
-                    }
-                )
-
-            if (
-                len(assistant_message.tool_calls) == 1
-                and assistant_message.tool_calls[0].function.name in IMMEDIATE_FORMAT_TOOLS
-                and last_direct_format is not None
-            ):
-                direct_name, direct_result = last_direct_format
-                direct = try_direct_tool_response(direct_name, direct_result)
-                if direct is not None:
-                    return {
-                        "response": direct,
-                        "tool_calls": tool_calls_made,
-                        "iterations": iteration + 1,
-                    }
-
-    return {
-        "response": "Maximum tool iterations reached. Partial investigation completed.",
-        "tool_calls": tool_calls_made,
-        "iterations": MAX_TOOL_ITERATIONS,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Dashboard API (direct CloudWatch — no LLM)
 # ---------------------------------------------------------------------------
 
@@ -2318,13 +1838,14 @@ def _run_insights_query(
 ) -> list[Any]:
     if not log_group_names:
         return []
-    response = logs_client.start_query(
-        logGroupNames=log_group_names,
-        startTime=start,
-        endTime=end,
-        queryString=query_string,
+    completed = execute_insights_query(
+        logs_client,
+        log_group_names=log_group_names,
+        query_string=query_string,
+        start=start,
+        end=end,
+        context="dashboard",
     )
-    completed = wait_for_logs_query(logs_client, response["queryId"])
     if completed.get("status") != "Complete":
         return []
     return completed.get("results") or []
@@ -2501,6 +2022,7 @@ def get_dashboard_error_details(
 class ChatMessage(BaseModel):
     role: str
     content: str
+    log_context: dict[str, Any] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -2512,6 +2034,7 @@ class ChatResponse(BaseModel):
     response: str
     tool_calls: list[dict[str, Any]]
     iterations: int
+    log_context: dict[str, Any] | None = None
 
 
 @asynccontextmanager
@@ -2608,6 +2131,15 @@ async def chat(request: ChatRequest) -> ChatResponse:
         logger.exception("AWS error during chat")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
+        if find_api_connection_error(exc) is not None:
+            logger.exception("vLLM connection failed during chat")
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Model servisine (vLLM) bağlanılamadı. "
+                    "vllm-gptoss pod'unun ayakta ve hazır olduğunu kontrol edip tekrar dene."
+                ),
+            ) from exc
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
