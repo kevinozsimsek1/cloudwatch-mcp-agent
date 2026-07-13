@@ -1,6 +1,18 @@
 # CloudWatch MCP Agent
 
-Doğal dilde CloudWatch log, metric ve alarm sorularını yanıtlayan LLM agent. Tek bir FastAPI servisi olarak çalışır; CloudWatch tool'ları in-process MCP ile sunar ve cevapları cluster içindeki vLLM modelinden üretir.
+| Dosya              | Açıklama                                                                     |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `config.py`        | Ortam değişkenlerini ve uygulama yapılandırmasını yönetir.                   |
+| `queries.py`       | CloudWatch Logs Insights sorgu şablonlarını içerir.                          |
+| `sre_context.py`   | Doğal dil zaman ifadelerini yorumlar ve SRE referans verilerini sağlar.      |
+| `agent.py`         | LLM promptları, istek yönlendirme ve yanıt formatlamasını gerçekleştirir. |
+| `server.py`        | MCP araçlarını, AWS Boto3 entegrasyonunu ve HTTP API'yi sunar.               |
+| `index.html`       | Chat arayüzünü, dashboard'u ve log kartlarını içerir.                        |
+| `deployment.yaml`  | Uygulamanın EKS ortamına dağıtım manifestidir.                               |
+| `.env.example`     | Lokal geliştirme ortamı için örnek ortam değişkenlerini içerir.              |
+| `sre_chat_test.py` | Otomatik regresyon testlerini ve senaryo doğrulamalarını içerir.             |
+
+VLLM + AGENT CloudWatch log, metric ve alarm sorularını yanıtlayan LLM agent. Tek bir FastAPI servisi olarak çalışır; CloudWatch tool'ları in-process MCP ile sunar ve cevapları cluster içindeki vLLM modelinden üretir.
 
 ```
 Kullanıcı → Chat UI / API → Agent loop → vLLM → MCP tools (boto3) → AWS CloudWatch (IRSA)
