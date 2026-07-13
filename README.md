@@ -4,7 +4,7 @@
 | ------------------ | ---------------------------------------------------------------------------- |
 | `config.py`        | Ortam değişkenlerini ve uygulama yapılandırmasını yönetir.                   |
 | `queries.py`       | CloudWatch Logs Insights sorgu şablonlarını içerir.                          |
-| `sre_context.py`   | Doğal dil zaman ifadelerini yorumlar ve SRE referans verilerini sağlar.      |
+| `sre_context.py`   | LLM zaman ifadelerini yorumlar ve SRE referans verilerini sağlar.      |
 | `agent.py`         | LLM promptları, istek yönlendirme ve yanıt formatlamasını gerçekleştirir. |
 | `server.py`        | MCP araçlarını, AWS Boto3 entegrasyonunu ve HTTP API'yi sunar.               |
 | `index.html`       | Chat arayüzünü, dashboard'u ve log kartlarını içerir.                        |
