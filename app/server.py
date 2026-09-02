@@ -495,6 +495,10 @@ def resolve_explicit_log_group_names(
         if not label:
             continue
         path = normalize_log_group_path(label)
+        bare = path.lstrip("/")
+        if re.match(r"^\d+:.+", bare):
+            resolved.append(bare)
+            continue
         if path.count("/") >= 3:
             resolved.append(path)
             continue
@@ -1069,7 +1073,7 @@ def query_log_group(
     query_string = resolve_log_search_query(
         search_filter,
         rank_by_log_group=(response_mode in {"summary", "count_only"}),
-        line_limit=min(200, max(1, int(max_result_lines))),
+        line_limit=min(500, max(1, int(max_result_lines))),
         rank_limit=1,
         tenant=(tenant_filter or "").strip() or None,
     )
@@ -1100,9 +1104,9 @@ def query_log_group(
 
     raw_results = completed.get("results", [])
     rank_results = response_mode in {"summary", "count_only"}
-    limit = 1 if rank_results else min(200, max(1, int(max_result_lines)))
+    limit = 1 if rank_results else min(500, max(1, int(max_result_lines)))
     if response_mode == "analysis":
-        limit = min(200, max(50, int(max_result_lines)))
+        limit = min(500, max(50, int(max_result_lines)))
     formatted = format_insights_rows_with_group(
         raw_results,
         log_group_name=log_group_name,
@@ -1362,7 +1366,7 @@ def search_logs_across_groups(
         resolved_query = resolve_log_search_query(
             search_filter,
             rank_by_log_group=rank_results,
-            line_limit=min(200, max(1, int(max_result_lines))),
+            line_limit=min(500, max(1, int(max_result_lines))),
             rank_limit=min(50, max(len(group_names), int(max_result_lines))),
             tenant=(tenant_filter or "").strip() or None,
         )
@@ -1429,7 +1433,7 @@ def search_logs_across_groups(
         }
 
     results = completed.get("results", [])
-    max_lines = min(200, max(1, int(max_result_lines)))
+    max_lines = min(500, max(1, int(max_result_lines)))
     formatted = format_insights_rows(
         results,
         limit=max_lines if not rank_results else 50,
@@ -2035,6 +2039,7 @@ class ChatResponse(BaseModel):
     tool_calls: list[dict[str, Any]]
     iterations: int
     log_context: dict[str, Any] | None = None
+    log_export: dict[str, Any] | None = None
 
 
 @asynccontextmanager

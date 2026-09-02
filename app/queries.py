@@ -18,6 +18,7 @@ LogSearchFilter = Literal[
     "http_503",
     "http_504",
     "http_5xx",
+    "http_4xx",
 ]
 
 LogResponseMode = Literal["summary", "detail", "count_only", "analysis"]
@@ -26,6 +27,12 @@ _HTTP_5XX_FILTER = (
     "| filter (status >= 500 and status < 600) or @message like /\"status\":\"5[0-9]{2}\"/ "
     "or @message like /(?i)(statusCode[\"']?\\s*[:=]\\s*\"?5\\d{2}\"?|"
     "status.?code.?5\\d{2}|HTTP\\/1\\.[01] 5\\d{2}\\b)/\n"
+)
+
+_HTTP_4XX_FILTER = (
+    "| filter (status >= 400 and status < 500) or @message like /\"status\":\"4[0-9]{2}\"/ "
+    "or @message like /(?i)(statusCode[\"']?\\s*[:=]\\s*\"?4\\d{2}\"?|"
+    "status.?code.?4\\d{2}|HTTP\\/1\\.[01] 4\\d{2}\\b)/\n"
 )
 
 _HTTP_2XX_FILTER = (
@@ -89,6 +96,7 @@ _FILTER_CLAUSES: dict[LogSearchFilter, str] = {
     "http_503": _http_code_filter("503").strip(),
     "http_504": _http_code_filter("504").strip(),
     "http_5xx": _HTTP_5XX_FILTER,
+    "http_4xx": _HTTP_4XX_FILTER,
 }
 
 LOG_SEARCH_QUERY_PRESETS: dict[LogSearchFilter, str] = {
@@ -106,7 +114,10 @@ def inject_query_filters(query_string: str, *, tenant: str | None = None) -> str
     """Append tenant scoping to an Insights query (path, tenantId, tenantDomain)."""
     if not tenant:
         return query_string
-    safe = re.escape(tenant.strip())
+    slug = tenant.strip()
+    if not slug or slug.isdigit():
+        return query_string
+    safe = re.escape(slug)
     filter_line = (
         "| filter @message like /(?i)({0}|\"tenantDomain\"\\s*:\\s*\"[^\"]*{0}|"
         "\"tenantId\"\\s*:\\s*\"[^\"]*{0}|\"path\"\\s*:\\s*\"[^\"]*/{0})/"

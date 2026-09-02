@@ -38,7 +38,9 @@ _MINUTES_RE = re.compile(
     re.I,
 )
 _HOURS_RE = re.compile(
-    r"(?:son\s+)?(\d+)\s*(?:saat|hr?s?)(?:de|dır|dir|da|ta)?\b|"
+    r"(?:son\s+)?(\d+)\s*(?:saat|hr?s?)"
+    r"(?:leri|ları|lar|ler|deki|daki|tek|taki|den|dan|de|dır|dir|da|ta|in|inde|ında)?"
+    r"(?=\b|\s|$|[\.,])|"
     r"(?:last\s+)?(\d+)\s*(?:hour?s?|hrs?)\b",
     re.I,
 )
