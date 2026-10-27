@@ -49,17 +49,15 @@ spec:
             - name: MAX_TOOL_ITERATIONS
               value: "10"
             - name: MAX_HISTORY_MESSAGES
-              value: "6"
+              value: "12"
             - name: MAX_HISTORY_MESSAGE_CHARS
               value: "2500"
             - name: MAX_TOOL_RESULT_CHARS
               value: "8000"
             - name: LLM_MAX_TOKENS
-              value: "700"
+              value: "2000"
             - name: LLM_TEMPERATURE
               value: "0.1"
-            - name: ENABLE_MECHANICAL_FALLBACKS
-              value: "false"
           readinessProbe:
             httpGet:
               path: /ready

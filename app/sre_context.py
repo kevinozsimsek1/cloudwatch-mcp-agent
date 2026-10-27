@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.config import DISPLAY_TIMEZONE

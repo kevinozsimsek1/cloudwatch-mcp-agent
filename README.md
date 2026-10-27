@@ -131,11 +131,11 @@ mouse ile üzerine geline tool listesi ui'da gözüküyor
 | `MODEL_NAME` | Model adı | `openai/gpt-oss-20b` |
 | `AWS_REGION` | AWS bölgesi | `eu-central-1` |
 | `MAX_TOOL_ITERATIONS` | Agent tool döngü limiti | `10` |
-| `MAX_HISTORY_MESSAGES` | Sohbet geçmişi mesaj limiti | `6` |
+| `MAX_HISTORY_MESSAGES` | LLM'in gördüğü geçmiş mesaj sayısı | `12` |
 | `MAX_HISTORY_MESSAGE_CHARS` | Mesaj başına karakter limiti | `2500` |
 | `MAX_TOOL_RESULT_CHARS` | Tool çıktısı truncate limiti | `8000` |
 | `MAX_LOG_GROUPS_LIST` | Listelenecek max log group | `1000` |
-| `LLM_MAX_TOKENS` | LLM max token | `700` |
+| `LLM_MAX_TOKENS` | LLM max token (gpt-oss reasoning dahil) | `2000` |
 | `LLM_TEMPERATURE` | LLM temperature | `0.1` |
 | `LOG_LEVEL` | Log seviyesi | `INFO` |
 | `DISPLAY_TIMEZONE` | "bugün / dün / bu hafta" takvim sınırları | `Europe/Istanbul` |
@@ -143,6 +143,18 @@ mouse ile üzerine geline tool listesi ui'da gözüküyor
 | `SYSTEM_SCAN_EXCLUDE_PREFIXES` | Sistem çapı aramadan hariç tutulan prefix'ler (virgülle) | `/aws/codebuild/` |
 | `LOG_GROUP_CATALOG_TTL` | Log group kataloğu cache süresi (sn) | `300` |
 | `INSIGHTS_MAX_CONCURRENCY` | Paralel Insights batch sayısı | `8` |
+
+## Agent nasıl çalışır
+
+Her mesajı LLM (gpt-oss-20b) karşılar; takip soruları, atıflar ("2. grubun detayı",
+"bunların kaçı 403?", "peki dün?") ve "neden" soruları önceki tool sonuçları ve oturum bağlamı üzerinden
+çözülür. Kod tarafı doğruluğu garanti eder:
+
+- Tool argümanları kullanıcının sözüne göre düzeltilir (zaman penceresi, kapsam, tenant).
+- Konuşmanın kapsamı korunur: modelin uydurduğu log grubu sistem aramasına çevrilir, tek gruplu bir
+  cevabın ardından gelen "bunların…" sorusu aynı grupta kalır.
+- Cevap = gerçek veriden çizilen kart + modelin 2–4 cümlelik yorumu. Yorumda tool sonuçlarında geçmeyen
+  sayı içeren cümleler, tablolar ve teknik parametre adları sunucu tarafından silinir.
 
 ## Cevap doğruluğu — nasıl çalışır
 
@@ -171,6 +183,9 @@ python -m pytest -q                                   # unit testler (AWS/LLM ge
 # Canlı servis üzerinde (port-forward açıkken):
 python scripts/sre_chat_test.py http://localhost:8080/chat        # tool seçimi regresyonu
 python scripts/e2e_user_persona_test.py http://localhost:8080/chat # multi-turn persona akışları
+
+# Sohbet: takip/atıf/"neden" sorularında doğru grup, filtre ve sürenin seçildiğini ölçer.
+python scripts/conversation_eval.py --chat-url http://localhost:8080/chat --runs 2
 
 # Doğruluk: agent cevaplarını doğrudan CloudWatch sorgularıyla karşılaştırır,
 # her soruyu N kez sorup tutarlılığı ölçer (CloudWatch okuma yetkisi gerekir).

@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 import time
 import asyncio
@@ -15,18 +14,13 @@ from botocore.exceptions import ClientError, NoCredentialsError
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from mcp import ClientSession
 from mcp.server.fastmcp import FastMCP
-from mcp.shared.memory import create_connected_server_and_client_session
-from mcp.types import CallToolResult, Tool
-from openai import AsyncOpenAI, BadRequestError
 from pydantic import BaseModel, Field
 
 from app.config import *
 from app.agent import find_api_connection_error, get_openai_tools, get_system_prompt, run_agent
 from app.queries import (
     HTTP_STATUS_BREAKDOWN_QUERY,
-    LOG_SEARCH_QUERY_PRESETS,
     LogResponseMode,
     LogSearchFilter,
     _FILTER_CLAUSES,
@@ -665,68 +659,6 @@ def format_insights_rows_with_group(
         else:
             row["log_group"] = normalize_insights_log_group(row["log_group"])
     return rows
-
-
-def compact_tool_result_for_context(tool_name: str, tool_result: str) -> str:
-    """Keep LLM context small after tool calls (mechanical, not intent-based)."""
-    if tool_name == "describe_log_groups":
-        data = parse_log_groups_tool_result(tool_result)
-        if data:
-            names = [
-                group.get("logGroupName", "")
-                for group in data.get("log_groups", [])
-                if group.get("logGroupName")
-            ]
-            payload = {
-                "count": len(names),
-                "log_group_names": names[:INSIGHTS_MAX_LOG_GROUPS],
-                "region": data.get("region", AWS_REGION),
-                "note": "Names for follow-up Insights query. Do not dump full catalog to user unless they asked.",
-            }
-            return json.dumps(payload, ensure_ascii=False)
-
-    if tool_name in {"execute_log_insights_query", "search_logs_across_groups", "query_log_group"}:
-        try:
-            data = json.loads(tool_result)
-        except json.JSONDecodeError:
-            return trim_message_content(tool_result, max_chars=MAX_TOOL_RESULT_CHARS)
-        if isinstance(data, dict):
-            results = data.get("results") or []
-            payload = {
-                "status": data.get("status"),
-                "log_groups_searched": data.get("log_groups_searched"),
-                "match_count": data.get("match_count", len(results)),
-                "results": format_insights_rows(results, limit=20),
-                "truncated": len(results) > 20,
-            }
-            if data.get("error"):
-                payload["error"] = data["error"]
-            return json.dumps(payload, ensure_ascii=False)
-
-    return trim_message_content(tool_result, max_chars=MAX_TOOL_RESULT_CHARS)
-
-
-def trim_message_content(content: str, max_chars: int = MAX_HISTORY_MESSAGE_CHARS) -> str:
-    if len(content) <= max_chars:
-        return content
-    return (
-        content[:max_chars]
-        + f"\n...[mesaj {len(content) - max_chars} karakter kısaltıldı]"
-    )
-
-
-def trim_conversation_history(history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    if not history:
-        return []
-    trimmed = history[-MAX_HISTORY_MESSAGES:]
-    return [
-        {
-            "role": message["role"],
-            "content": summarize_message_for_history(message.get("content", "")),
-        }
-        for message in trimmed
-        if message.get("role") in {"user", "assistant"} and message.get("content")
-    ]
 
 
 def wait_for_logs_query(logs_client, query_id: str) -> dict[str, Any]:
@@ -2427,6 +2359,7 @@ class ChatResponse(BaseModel):
     log_export: dict[str, Any] | None = None
     card: dict[str, Any] | None = None
     suggestions: list[str] | None = None
+    insight: str | None = None
 
 
 @asynccontextmanager

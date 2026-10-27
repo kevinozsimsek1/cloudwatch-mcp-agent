@@ -173,7 +173,7 @@ def test_ranking_card_and_suggestions():
     assert card["kind"] == "ranking"
     assert card["top"][0] == {"group": "/aws/msk-debezium-dev", "count": 3178}
     assert card["total"] == 6089 and card["groups_with_matches"] == 15
-    assert build_suggestions(card)[0] == "1 numarayı detaylı göster"
+    assert build_suggestions(card) == ["1. grubun detayını göster", "logları analiz et", "Hataları dünle karşılaştır"]
 
 
 def test_count_card_carries_status_breakdown():
@@ -216,3 +216,56 @@ def test_metric_card_has_series_and_change():
     assert card["kind"] == "metric"
     assert card["change_pct"] == 100.0
     assert len(card["series"]) == 2
+
+
+def test_metric_answer_points_followups_at_related_logs():
+    from app.agent import metric_log_context, parse_ranked_group_selection
+
+    ctx = metric_log_context(
+        {
+            "namespace": "AWS/ApiGateway",
+            "metric_name": "5XXError",
+            "start_time": "2026-10-26T12:00:00Z",
+            "end_time": "2026-10-27T12:00:00Z",
+        }
+    )
+    assert ctx["search_filter"] == "http_5xx"
+    assert ctx["log_group_name_keywords"] == ["api-gateway"]
+    assert ctx["hours"] == 24
+    assert ctx["log_group_name"] is None
+    assert parse_ranked_group_selection("1. grubun detayını göster", [("/a", 3), ("/b", 1)]) == "/a"
+
+
+def test_message_pattern_groups_repeats_of_one_error():
+    from app.agent import message_pattern
+
+    a = message_pattern("[Worker-01a8] Fetching orders for tenant 6dc424c1-6879-4138-957a-272fa2ffe2b4 failed after 3 retries")
+    b = message_pattern("[Worker-77ff] Fetching orders for tenant 08dc78a1-55cc-44fc-8222-5fa04e367a88 failed after 5 retries")
+    assert a == b == "Fetching orders for tenant <id> failed after <n> retries"
+
+
+def test_app_log_analysis_for_otel_and_plain_text():
+    import json as _json
+
+    from app.agent import format_log_analysis_report
+
+    otel = _json.dumps({
+        "body": "error: Cache invalidation socket could not be started. uri=https://x/negotiate?Era-Tenant-Id=1",
+        "severity_text": "ERROR",
+        "resource": {"service.name": "era-pos-ui", "deployment.environment.name": "local"},
+    })
+    rows = [{"message": otel, "log_group": "/aws/otlp/era-eks-dev/pos-backend"}] * 3 + [
+        {"message": "org.apache.kafka.common.errors.TimeoutException: Timeout expired", "log_group": "/aws/otlp/era-eks-dev/pos-backend"}
+    ]
+    text = format_log_analysis_report({
+        "log_group_name": "/aws/otlp/era-eks-dev/pos-backend",
+        "hours": 6,
+        "search_filter": "errors",
+        "response_mode": "analysis",
+        "match_count": 4040,
+        "results": rows,
+    })
+    assert "analiz örneği: **4** satır" in text
+    assert "**3×** (%75)" in text
+    assert "**era-pos-ui**: 3" in text
+    assert "**local**" in text
