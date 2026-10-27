@@ -31,11 +31,15 @@ from app.config import (
 from app.queries import LOG_SEARCH_QUERY_PRESETS, LogSearchFilter, SEARCH_FILTER_ALIASES
 from app.sre_context import (
     METRIC_NAMESPACE_TABLE,
+    TimeWindow,
+    calendar_window,
     comparison_period_hints,
+    display_timezone,
     infer_metric_targets,
     is_ambiguous_time_reference,
     has_explicit_time_window,
     parse_hours_from_message,
+    parse_time_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,7 +129,7 @@ YOU decide which tools to call from the user's message — never answer from mem
 | Alarms — active | "aktif alarm" | get_active_alarms |
 | Alarms — history | "tetiklendi", "alarm geçmişi" | get_alarm_history (alarm_name optional) |
 | Alarm root cause | "neden tetiklendi", "why did alarm fire" | get_alarm_history THEN search_logs_across_groups or query_log_group |
-| Metrics | CPU, latency, errors, ECS/Lambda/RDS… | analyze_metric / get_metric_data |
+| Metrics | explicit "metrik/metric", CPU, memory, latency, invocations… | analyze_metric / get_metric_data (omit statistic → Sum for counters, Average for gauges; omit dimensions → account-wide total) |
 | Comparison / trend | "bugün vs dün", "today vs yesterday", "this week vs last" | same tool TWICE, different start_time/end_time |
 
 ## CRITICAL rules
@@ -174,11 +178,14 @@ Right: full path given → query_log_group(log_group_name="<exact path>", ...).
 - User states a duration → **MUST** pass the correct numeric `hours` (or `start_time` + `end_time`).
   Never keep `hours=1` when the user said otherwise.
 - Mapping examples:
-  - "son 12 saat" / "son 12 saatde" / "last 12 hours" → `hours=12`
+  - "son 12 saat" / "son 12 saatte" / "last 12 hours" → `hours=12`
   - "son 6 saat" → `hours=6`
-  - "son 3 gün" / "last 3 days" → `hours=72`
-  - "dün" / "yesterday" → `hours=24`
-  - "bugün" / "today" → hours from midnight UTC to now (use parsed value)
+  - "son 30 dakika" / "last 15 minutes" → `minutes=30` / `minutes=15` (not hours=1)
+  - "son 3 gün" / "son 2 günde" / "last 3 days" → `hours=72` / `hours=48`
+  - "dün" / "yesterday" → the previous Europe/Istanbul calendar day (`start_time`/`end_time`,
+    `period_label="Dün"`) — NOT the last 24 hours
+  - "bugün" / "today" → Europe/Istanbul midnight → now (`period_label="Bugün"`)
+- The server normalises the window from the user's exact words; always state the window you used.
 - Apply the same time window to every tool call in the turn (query_log_group, search_logs_across_groups, alarms, metrics).
 
 ## No tool hopping after a call
@@ -194,7 +201,11 @@ If a tool result looks incomplete or unexpected:
   - "A ve B log grubundakileri detaylı getir" → log_group_names=[A,B], response_mode=detail
   - "sadece E ve F'nin sayısını getir" → log_group_names=[E,F], response_mode=count_only
   - "sadece A log grubu" → query_log_group if full path known; else search_logs_across_groups(log_group_names=[A])
-- If user did NOT name groups AND wants system-wide view → omit log_group_names, use response_mode=summary.
+- If user did NOT name groups AND wants system-wide view → omit log_group_names AND
+  log_group_name_keywords, use response_mode=summary. The server then searches EVERY runtime log group
+  (all services, lambdas, EKS/containerinsights, MSK, RDS…; CI/codebuild excluded).
+- If the user names a service ("plt-comm-order servisinde", "debezium loglarında") → pass it in
+  log_group_name_keywords so only matching groups are searched.
 - Prefer search_filter presets: {presets}
 - response_mode: summary | count_only | detail (see tool schema).
 - Success / 2xx / non-error traffic → search_filter=http_2xx (NOT errors).
@@ -788,17 +799,18 @@ async def _run_group_detail_query(
         if _log_groups_equivalent(str(name), group):
             peak_count = max(peak_count, int(count))
             break
-    if peak_count > max_lines and parse_explicit_line_limit(message) is None:
+    # Preview by default (the header carries the real total); fetch everything only on request.
+    if show_all and peak_count > max_lines and parse_explicit_line_limit(message) is None:
         max_lines = min(_MAX_RESULT_LINES, peak_count)
-        show_all = show_all or peak_count > _DETAIL_PREVIEW_LINES
 
     tool_args: dict[str, Any] = {
         "log_group_name": normalize_log_group_path(group),
         "hours": hours,
         "search_filter": search_filter,
         "response_mode": "analysis" if is_log_analysis_request(message) else "detail",
-        "max_result_lines": min(_MAX_RESULT_LINES, max(max_lines, peak_count or max_lines)),
+        "max_result_lines": min(_MAX_RESULT_LINES, max_lines),
     }
+    apply_ctx_window(tool_args, ctx)
     tenant = extract_tenant_filter(message) or str(ctx.get("tenant_filter") or "") or None
     if tenant:
         tool_args["tenant_filter"] = tenant
@@ -962,6 +974,13 @@ def build_log_context_from_tool_data(data: dict[str, Any]) -> dict[str, Any] | N
     ctx: dict[str, Any] = {"hours": hours, "search_filter": search_filter}
     if data.get("tenant_filter"):
         ctx["tenant_filter"] = str(data["tenant_filter"])
+    if data.get("window_label"):
+        ctx["window_label"] = str(data["window_label"])
+        if data.get("window_minutes"):
+            ctx["window_minutes"] = int(data["window_minutes"])
+        elif data.get("start_time") and data.get("end_time"):
+            ctx["start_time"] = str(data["start_time"])
+            ctx["end_time"] = str(data["end_time"])
 
     if data.get("log_group_name"):
         group = normalize_log_group_path(
@@ -1036,21 +1055,174 @@ def build_log_export_payload(data: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+_FILTER_LABELS = {
+    "errors": "Hatalar",
+    "http_2xx": "2xx başarılı istekler",
+    "http_4xx": "4xx yanıtlar",
+    "http_5xx": "5xx yanıtlar",
+    "http_500_backend": "HTTP 500 (backend)",
+}
+_FILTER_PHRASES = {
+    "errors": "hataları",
+    "http_2xx": "2xx isteklerini",
+    "http_4xx": "4xx hatalarını",
+    "http_5xx": "5xx hatalarını",
+    "http_500_backend": "backend 500 hatalarını",
+}
+
+
+def _filter_label(search_filter: str) -> str:
+    if search_filter in _FILTER_LABELS:
+        return _FILTER_LABELS[search_filter]
+    if search_filter.startswith("http_"):
+        return f"HTTP {search_filter[5:]}"
+    return search_filter or "Arama"
+
+
+def _filter_phrase(search_filter: str) -> str:
+    if search_filter in _FILTER_PHRASES:
+        return _FILTER_PHRASES[search_filter]
+    if search_filter.startswith("http_"):
+        return f"{search_filter[5:]} hatalarını"
+    return "hataları"
+
+
+def build_response_card(tool_name: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    """Structured summary of a tool result for the UI answer card (real tool data only)."""
+    if not isinstance(data, dict) or data.get("error"):
+        return None
+    if tool_name == "analyze_metric":
+        card: dict[str, Any] = {
+            "kind": "metric",
+            "title": f"{data.get('namespace', '')} / {data.get('metric_name', '')}",
+            "namespace": data.get("namespace"),
+            "metric_name": data.get("metric_name"),
+            "statistic": data.get("statistic"),
+            "window": (
+                f"{data['start_time']} → {data['end_time']}"
+                if data.get("start_time") and data.get("end_time")
+                else None
+            ),
+            "aggregation": data.get("aggregation"),
+            "tool": tool_name,
+        }
+        if not data.get("datapoint_count"):
+            return {**card, "empty": True}
+        first, second = data.get("first_half_avg"), data.get("second_half_avg")
+        change = (second - first) / first * 100 if first and second is not None else None
+        return {
+            **card,
+            "sum": data.get("sum"),
+            "average": data.get("average"),
+            "min": data.get("min"),
+            "max": data.get("max"),
+            "trend": data.get("trend"),
+            "change_pct": round(change, 1) if change is not None else None,
+            "datapoints": data.get("datapoint_count"),
+            "series": data.get("series") or [],
+        }
+
+    if tool_name not in {"query_log_group", "search_logs_across_groups"}:
+        return None
+    search_filter = str(data.get("search_filter") or "")
+    hours = int(data.get("hours") or 1)
+    card = {
+        "tool": tool_name,
+        "filter": search_filter,
+        "filter_label": _filter_label(search_filter),
+        "window": data.get("window_label") or f"son {hours} saat",
+        "hours": hours,
+        "start_time": data.get("start_time"),
+        "end_time": data.get("end_time"),
+        "scope": data.get("scope") or ("group" if data.get("log_group_name") else None),
+        "log_group": data.get("log_group_name"),
+        "groups_searched": data.get("log_groups_searched"),
+        "keywords": data.get("keywords_tried") or [],
+        "excluded_prefixes": data.get("excluded_prefixes") or [],
+        "tenant": data.get("tenant_filter"),
+        "total": int(data.get("total_matches") or data.get("match_count") or 0),
+        "bytes_scanned": data.get("bytes_scanned"),
+        "batches": data.get("insights_batches"),
+        "status": data.get("status"),
+    }
+    mode = data.get("response_mode")
+    if mode == "analysis":
+        return {**card, "kind": "analysis"}
+    if mode in {"summary", "count_only"}:
+        ranked = sorted(
+            (
+                (
+                    _srv().normalize_insights_log_group(str(row.get("log_group") or "").strip()),
+                    int(float(row.get("matches") or 0)),
+                )
+                for row in _collect_log_rows_from_data(data)
+                if str(row.get("log_group") or "").strip()
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        if data.get("log_group_name") and len(ranked) <= 1:
+            return {
+                **card,
+                "kind": "count",
+                "status_breakdown": data.get("status_breakdown") or [],
+            }
+        if not ranked:
+            return {**card, "kind": "empty"}
+        return {
+            **card,
+            "kind": "ranking",
+            "groups_with_matches": max(len(ranked), int(data.get("groups_with_matches") or 0)),
+            "top": [{"group": g, "count": c} for g, c in ranked[:10]],
+        }
+    rows_returned = len(_collect_log_rows_from_data(data))
+    return {**card, "kind": "detail" if rows_returned else "empty", "shown": rows_returned}
+
+
+def build_suggestions(card: dict[str, Any] | None) -> list[str]:
+    """Clickable follow-ups; each phrase is handled by an existing follow-up path."""
+    if not card:
+        return []
+    kind = card.get("kind")
+    hours = int(card.get("hours") or 1)
+    wider = "son 24 saate bak" if hours < 24 else "son 7 güne bak"
+    phrase = _filter_phrase(str(card.get("filter") or ""))
+    if kind == "metric":
+        return [f"{card.get('namespace')} {card.get('metric_name')} metriği son 7 günde nasıl?"]
+    if kind == "ranking":
+        return ["1 numarayı detaylı göster", "logları analiz et", f"Bugün vs dün {phrase} karşılaştır"]
+    if kind == "count":
+        suggestions = ["detaylı göster", "logları analiz et"] if card.get("total") else []
+        return suggestions + [wider]
+    if kind == "detail":
+        total, shown = int(card.get("total") or 0), int(card.get("shown") or 0)
+        extra = ["tamamını göster"] if shown < total <= _MAX_RESULT_LINES else []
+        return ["logları analiz et", *extra]
+    if kind == "empty":
+        return [wider]
+    return []
+
+
 def attach_log_context(
     result: dict[str, Any],
     tool_name: str,
     tool_result: str,
 ) -> dict[str, Any]:
-    if tool_name not in {"query_log_group", "search_logs_across_groups"}:
+    if tool_name not in {"query_log_group", "search_logs_across_groups", "analyze_metric"}:
         return result
     try:
         data = json.loads(tool_result)
     except json.JSONDecodeError:
         return result
+    enriched = dict(result)
+    card = build_response_card(tool_name, data)
+    if card:
+        enriched["card"] = card
+        enriched["suggestions"] = build_suggestions(card)
+    if tool_name == "analyze_metric":
+        return enriched
     log_context = build_log_context_from_tool_data(data)
     if not log_context:
-        return result
-    enriched = dict(result)
+        return enriched
     enriched["log_context"] = log_context
     export_payload = build_log_export_payload(data)
     if export_payload:
@@ -1287,6 +1459,17 @@ def format_filter_display_name(filter_name: str) -> str:
     return filter_name
 
 
+def format_status_breakdown(breakdown: list[dict[str, Any]] | None) -> str:
+    if not breakdown:
+        return ""
+    parts = " · ".join(f"**{item['status']}**: {item['count']}" for item in breakdown[:8])
+    return (
+        f"\n\n**HTTP 4xx/5xx yanıt dağılımı:** {parts}\n"
+        "_**errors** sayımı uygulama hata kayıtlarını ve tüm 5xx yanıtlarını kapsar; "
+        "4xx istemci yanıtlarının tamamı yukarıda ayrıca listelendi._"
+    )
+
+
 def format_single_group_summary_reply(
     *,
     group_name: str,
@@ -1297,20 +1480,40 @@ def format_single_group_summary_reply(
     window_note: str,
     prefix: str,
     tenant_filter: str | None = None,
+    window_label: str | None = None,
+    status_breakdown: list[dict[str, Any]] | None = None,
 ) -> str:
     display_filter = format_filter_display_name(filter_name)
     tenant_note = f" (tenant: **{tenant_filter}**)" if tenant_filter else ""
+    window = f"**{window_label}**" if window_label else f"son **{hours} saat**"
+    breakdown = format_status_breakdown(status_breakdown)
     if count == 0:
         return (
-            f"{prefix}Son **{hours} saat** içinde `{group_name}` log grubunda{tenant_note} "
-            f"**{display_filter}** için eşleşme bulamadım (durum: {status}){window_note}."
+            f"{prefix}{window[0].upper() + window[1:]} içinde `{group_name}` log grubunda{tenant_note} "
+            f"**{display_filter}** için eşleşme bulamadım (durum: {status}){window_note}.{breakdown}"
         )
     return (
-        f"{prefix}Evet — son **{hours} saat** içinde `{group_name}` log grubunda{tenant_note} "
-        f"**{count}** adet **{display_filter}** kaydı bulundu (durum: {status}){window_note}.\n\n"
+        f"{prefix}Evet — {window} içinde `{group_name}` log grubunda{tenant_note} "
+        f"**{count}** adet **{display_filter}** kaydı bulundu (durum: {status}){window_note}.{breakdown}\n\n"
         "İstersen satır satır detayını gösterebilirim; **\"detaylı göster\"** yazman yeterli.\n"
         "Kök neden özeti için **\"logları analiz et\"** de."
     )
+
+
+def format_search_scope(data: dict[str, Any]) -> str:
+    """One line telling the user exactly which log groups were searched."""
+    searched = int(data.get("log_groups_searched") or 0)
+    scope = data.get("scope")
+    excluded = ", ".join(f"`{p}`" for p in data.get("excluded_prefixes") or [])
+    excluded_note = f" ({excluded} hariç)" if excluded else ""
+    if scope == "system":
+        return f"Kapsam: **tüm sistem** — {searched} log grubu tarandı{excluded_note}"
+    if scope == "keywords":
+        keywords = ", ".join(f"`{k}`" for k in data.get("keywords_tried") or [])
+        return f"Kapsam: {keywords} ile eşleşen **{searched}** log grubu{excluded_note}"
+    if data.get("requested_log_group_names"):
+        return f"Kapsam: istenen **{searched}** log grubu"
+    return ""
 
 
 def extract_log_group_paths(message: str) -> list[str]:
@@ -1455,33 +1658,46 @@ def format_alarm_history(data: dict[str, Any]) -> str:
 def format_analyze_metric(data: dict[str, Any]) -> str:
     if data.get("error"):
         return f"Metrik analizi başarısız: {data['error']}"
-    if data.get("message") and not data.get("datapoint_count"):
-        ns = data.get("namespace", "")
-        metric = data.get("metric_name", "")
-        prefix = f"**{ns} / {metric}**\n" if ns and metric else ""
-        return f"{prefix}{data['message']}"
-
     ns = data.get("namespace", "")
     metric = data.get("metric_name", "")
     stat = data.get("statistic", "Average")
+    window = ""
+    if data.get("start_time") and data.get("end_time"):
+        window = f" ({data['start_time']} → {data['end_time']})"
+    if data.get("message") and not data.get("datapoint_count"):
+        prefix = f"**{ns} / {metric}** ({stat}){window}\n" if ns and metric else ""
+        return f"{prefix}Bu aralıkta veri noktası bulunamadı."
+
     trend_map = {
-        "increasing": "artıyor",
-        "decreasing": "azalıyor",
+        "increasing": "artıyor ↑",
+        "decreasing": "azalıyor ↓",
         "stable": "stabil",
     }
     trend = trend_map.get(str(data.get("trend", "")), data.get("trend", ""))
-    lines = [
-        f"**{ns} / {metric}** ({stat})",
-        f"- Veri noktası: {data.get('datapoint_count', 0)}",
-        f"- Min: {data.get('min', 0):.2f}",
-        f"- Max: {data.get('max', 0):.2f}",
-        f"- Ortalama: {data.get('average', 0):.2f}",
-        f"- Trend: {trend}",
-    ]
-    if data.get("first_timestamp"):
-        lines.append(f"- Başlangıç: {data['first_timestamp']}")
-    if data.get("last_timestamp"):
-        lines.append(f"- Bitiş: {data['last_timestamp']}")
+    first_avg = data.get("first_half_avg")
+    second_avg = data.get("second_half_avg")
+    if isinstance(first_avg, (int, float)) and isinstance(second_avg, (int, float)) and first_avg:
+        change = (second_avg - first_avg) / first_avg * 100
+        trend = f"{trend} (son yarı, ilk yarıya göre {change:+.0f}%)"
+    scope = {
+        "account-wide": "tüm kaynaklar (hesap geneli toplam)",
+        "dimensions": "seçili boyutlar",
+    }.get(str(data.get("aggregation") or ""), "")
+    lines = [f"**{ns} / {metric}** ({stat}){window}"]
+    if scope:
+        lines.append(f"- Kapsam: {scope}")
+    if stat == "Sum":
+        lines.append(f"- **Toplam: {data.get('sum', 0):,.0f}**".replace(",", "."))
+    lines.extend(
+        [
+            f"- Veri noktası: {data.get('datapoint_count', 0)}",
+            f"- Min: {data.get('min', 0):.2f} · Max: {data.get('max', 0):.2f} · "
+            f"Ortalama (periyot başına): {data.get('average', 0):.2f}",
+            f"- Trend: {trend}",
+        ]
+    )
+    if data.get("first_timestamp") and data.get("last_timestamp"):
+        lines.append(f"- İlk / son veri noktası: {data['first_timestamp']} → {data['last_timestamp']}")
     return "\n".join(lines)
 
 
@@ -1509,19 +1725,32 @@ def is_active_alarms_request(message: str) -> bool:
     ) and not is_alarm_history_request(message)
 
 
+_METRIC_WORD_RE = re.compile(r"metri[kğ]|metric", re.I)
+_METRIC_SIGNAL_RE = re.compile(
+    r"\bcpu\b|memory|bellek|\bmem\b|latency|gecikme|throttl|invocation|çağrı\s+sayı|"
+    r"duration|utilization|kullanım\s+oran|bağlantı\s+sayı|connection\s+count|"
+    r"concurrent|queue\s+depth|kuyruk",
+    re.I,
+)
+_LOG_CONTENT_RE = re.compile(
+    r"\blog|access|satır|kayıt|record|line|(?<!\d)[1-5]\d{2}(?!\d)|[1-5]\s*xx\b",
+    re.I,
+)
+
+
 def is_metric_analysis_request(message: str) -> bool:
+    """Explicit metric questions only — "error" alone is a log question, not a metric one."""
     lowered = message.lower()
-    if re.search(r"metrik|metric", lowered) and re.search(
-        r"cpu|memory|mem|latency|gecikme|error|invoc|throttl|duration|süre|bağlant",
-        lowered,
-    ):
+    if _METRIC_WORD_RE.search(lowered):
         return True
+    if _LOG_CONTENT_RE.search(lowered):
+        return False
     return bool(
         re.search(
-            r"\b(ecs|lambda|rds|alb|api\s*gateway|ec2|sqs|cloudfront|dynamo|eks|kubernetes)\b",
+            r"\b(ecs|lambda|rds|alb|api\s*gateway|ec2|sqs|cloudfront|dynamo|eks|kubernetes|elasticache)\b",
             lowered,
         )
-        and re.search(r"cpu|memory|mem|metrik|metric|latency|gecikme|error|invoc", lowered)
+        and _METRIC_SIGNAL_RE.search(lowered)
     )
 
 
@@ -1737,16 +1966,33 @@ def normalize_tenant_slug(raw: str) -> str:
     return slug
 
 
+_NON_TENANT_TOKENS = {
+    "api-gateway", "apigateway", "api", "lambda", "containerinsights", "codebuild", "alb", "eks",
+    "ecs", "rds", "cloudfront", "log", "loglar", "logları", "error", "errors", "hata", "hataları",
+    "son", "bugün", "dün", "sistem", "sistemde", "tüm", "sayı", "sayısını", "status", "http",
+}
+# "sadece api-gateway ve lambda log gruplarında" names log groups, not a tenant.
+_SCOPE_AFTER_SLUG_RE = re.compile(
+    r"^['\"]?\s+(?:ve\s+[\w\-\.]+\s+|and\s+[\w\-\.]+\s+)?(?:log|grub|grup|servis|service|pod)",
+    re.I,
+)
+
+
 def _is_valid_tenant_slug(slug: str) -> bool:
     """Reject HTTP status codes and other non-tenant tokens."""
     if len(slug) < 3:
         return False
     if slug.isdigit():
         return False
+    if slug in _NON_TENANT_TOKENS or re.fullmatch(r"[1-5](?:\d\d|xx)", slug):
+        return False
     return True
 
 
 def extract_tenant_filter(message: str) -> str | None:
+    only = re.search(r"(?:sadece|only)\s+['\"]?([\w\-\.]+)", message, re.I)
+    if only and _SCOPE_AFTER_SLUG_RE.match(message[only.end():]):
+        message = message[: only.start()] + message[only.end():]
     patterns = (
         r"(?:sadece|only)\s+['\"]?([\w\-\.]+)['\"]?",
         r"['\"]?([\w\-\.]+)['\"]?\s+tenn?ant[ıi]na\s+ait",
@@ -1960,6 +2206,7 @@ def format_log_analysis_report(data: dict[str, Any]) -> str:
     tenant = str(data.get("tenant_filter") or "").strip()
     filter_name = format_filter_display_name(str(data.get("search_filter") or "errors"))
     match_count = int(data.get("match_count") or len(rows))
+    window_label = str(data.get("window_label") or "").strip()
     window_note = ""
     if data.get("start_time") and data.get("end_time"):
         window_note = f" ({data['start_time']} → {data['end_time']})"
@@ -1967,7 +2214,8 @@ def format_log_analysis_report(data: dict[str, Any]) -> str:
     tenant_note = f" · tenant: **{tenant}**" if tenant else ""
     lines = [
         f"## Log analizi — `{group}`",
-        f"**Dönem:** son **{hours} saat** · **filtre:** {filter_name}{tenant_note}{window_note}",
+        f"**Dönem:** {f'**{window_label}**' if window_label else f'son **{hours} saat**'} · "
+        f"**filtre:** {filter_name}{tenant_note}{window_note}",
         f"**Toplam eşleşme:** **{match_count}** kayıt (analiz örneği: **{len(events)}** satır)",
         "",
     ]
@@ -2082,6 +2330,9 @@ def format_log_search_results(data: dict[str, Any]) -> str:
     groups_searched = int(data.get("log_groups_searched") or 0)
     status = data.get("status", "Unknown")
     period_label = (data.get("period_label") or "").strip()
+    window_label = (data.get("window_label") or "").strip()
+    window = window_label or f"son {hours} saat"
+    scope_line = format_search_scope(data)
     window_note = ""
     if data.get("start_time") and data.get("end_time"):
         window_note = f" ({data['start_time']} → {data['end_time']})"
@@ -2092,7 +2343,7 @@ def format_log_search_results(data: dict[str, Any]) -> str:
     if data.get("log_group_name"):
         all_groups = [str(data["log_group_name"])] + [g for g in all_groups if g != data["log_group_name"]]
 
-    prefix = f"**{period_label}** — " if period_label else ""
+    prefix = f"**{period_label}** — " if period_label and period_label != window_label else ""
     response_mode = data.get("response_mode") or (
         "summary" if data.get("rank_by_log_group") else "detail"
     )
@@ -2125,9 +2376,10 @@ def format_log_search_results(data: dict[str, Any]) -> str:
                 if data.get("requested_log_group_names")
                 else f"{groups_searched} log grubu"
             )
+            scope_suffix = f"\n{scope_line}" if scope_line else ""
             return (
-                f"{prefix}**{filter_name} — sayım** (son {hours} saat, {scope}) — "
-                f"eşleşme bulunamadı (durum: {status}).{window_note}"
+                f"{prefix}**{filter_name} — sayım** ({window}, {scope}) — "
+                f"eşleşme bulunamadı (durum: {status}).{window_note}{scope_suffix}"
             )
         if data.get("log_group_name") and len(ranked) <= 1:
             group_name = str(data["log_group_name"])
@@ -2141,21 +2393,29 @@ def format_log_search_results(data: dict[str, Any]) -> str:
                 window_note=window_note,
                 prefix=prefix,
                 tenant_filter=str(data.get("tenant_filter") or "") or None,
+                window_label=window_label or None,
+                status_breakdown=data.get("status_breakdown"),
             )
 
         title = "Sistem özeti" if response_mode == "summary" else "Seçili gruplar — sayım"
+        groups_with_matches = max(len(ranked), int(data.get("groups_with_matches") or 0))
         lines = [
-            f"{prefix}**{title} — {filter_name}** (son {hours} saat, durum: {status}){window_note}",
-            f"**{len(ranked)} log grubunda** eşleşme var · **Toplam: {total_matches}** kayıt",
+            f"{prefix}**{title} — {filter_name}** ({window}, durum: {status}){window_note}",
+            f"**{groups_with_matches} log grubunda** eşleşme var · **Toplam: {total_matches}** kayıt",
+            scope_line,
             "",
             "| # | Log group | Adet |",
             "|---|-----------|------|",
         ]
         for index, (log_group, count) in enumerate(ranked, 1):
             lines.append(f"| {index} | `{log_group}` | **{count}** |")
-        if response_mode == "count_only":
-            pass
-        return "\n".join(line for line in lines if line)
+        result = "\n".join(line for line in lines if line)
+        if groups_with_matches > len(ranked):
+            result += (
+                f"\n\n_İlk {len(ranked)} grup gösteriliyor; {groups_with_matches - len(ranked)} grupta "
+                "daha az sayıda eşleşme var (toplama dahil)._"
+            )
+        return result
 
     if data.get("rank_by_log_group"):
         ranked = _ranked_rows()
@@ -2180,11 +2440,13 @@ def format_log_search_results(data: dict[str, Any]) -> str:
         suffix = f"\n\nLog group: {sample}" if sample else ""
         if data.get("log_group_name"):
             return (
-                f"{prefix}`{data['log_group_name']}` — son {hours} saat içinde eşleşen satır bulunamadı "
+                f"{prefix}`{data['log_group_name']}` — {window} içinde eşleşen satır bulunamadı "
                 f"(durum: {status}).{window_note}{suffix}"
             )
+        if scope_line:
+            suffix = f"\n\n{scope_line}"
         return (
-            f"{prefix}Son {hours} saat içinde {groups_searched} log grubunda arama yapıldı — "
+            f"{prefix}{window[0].upper() + window[1:]} içinde {groups_searched} log grubunda arama yapıldı — "
             f"eşleşen satır bulunamadı (durum: {status}).{window_note}{suffix}"
         )
 
@@ -2197,16 +2459,24 @@ def format_log_search_results(data: dict[str, Any]) -> str:
 
     lines = []
     display_filter = format_filter_display_name(filter_name)
+    default_group = str(data.get("log_group_name") or "")
+    window_md = f"**{window_label}**" if window_label else f"son **{hours} saat**"
+    rows_returned = len(rows)
+    preview_note = (
+        f" · en yeni **{min(rows_returned, _MAX_RESULT_LINES)}** satır getirildi"
+        if match_count > rows_returned
+        else ""
+    )
     if data.get("log_group_name"):
         lines.append(
-            f"{prefix}**`{data['log_group_name']}`** — son **{hours} saat** · "
-            f"**{display_filter}** · **{match_count}** kayıt{window_note}"
+            f"{prefix}**`{data['log_group_name']}`** — {window_md} · "
+            f"**{display_filter}** · **{match_count}** kayıt{preview_note}{window_note}"
         )
         lines.append("")
         lines.append("**Kayıtlar (CloudWatch alan görünümü):**")
     else:
         lines.append(
-            f"{prefix}**Detay — {display_filter}** · son {hours} saat · **{match_count}** satır "
+            f"{prefix}**Detay — {display_filter}** · {window} · **{match_count}** kayıt{preview_note} "
             f"({groups_searched} log grubu, durum: {status}){window_note}"
         )
 
@@ -2272,13 +2542,21 @@ def format_log_search_results(data: dict[str, Any]) -> str:
 
     if data.get("truncated") or match_count > shown:
         remaining = max(0, match_count - shown)
-        if remaining:
+        if remaining and match_count <= _MAX_RESULT_LINES:
             lines.append(
                 f"\n... ve **{remaining}** kayıt daha. "
                 f"**\"tamamını göster\"** veya **\"{remaining} ini getir\"** yazabilirsin."
             )
+        elif remaining:
+            lines.append(
+                f"\n... ve **{remaining}** kayıt daha. Tek seferde en fazla {_MAX_RESULT_LINES} satır "
+                "gösterebiliyorum — zaman aralığını daraltabilir, tenant filtresi verebilir veya "
+                "**\"logları analiz et\"** diyerek kök neden özetini alabilirsin."
+            )
 
-    if all_groups:
+    if scope_line and data.get("scope") == "system":
+        lines.append(f"\n{scope_line}")
+    elif all_groups:
         lines.append(f"\n**Aranan log grupları ({len(all_groups)}):**")
         for name in all_groups[:40]:
             lines.append(f"- `{_srv().normalize_insights_log_group(name)}`")
@@ -2408,6 +2686,20 @@ def is_vague_log_question(message: str) -> bool:
     return bool(re.search(r"^(500|5\s*xx|4\s*xx|hata|error)\s+var\s+m[ıi]\??$", stripped, re.I))
 
 
+_SCOPE_STOPWORDS = {
+    "son", "tüm", "tum", "bütün", "butun", "sistem", "sistemdeki", "sistemin", "access", "api",
+    "bu", "şu", "hangi", "error", "errors", "hata", "hataları", "http", "the", "all", "uygulama",
+    "uygulamanın", "app", "application", "gateway", "aws", "cloudwatch", "insights", "detaylı",
+    "en", "çok", "her", "kaç", "o", "bir", "dev", "prod", "lambda", "ecs", "eks", "log", "logs",
+    "veren", "eden", "olan", "alan", "gelen", "çalışan", "hangisi", "ilgili", "diğer", "bazı",
+}
+_HYPHENATED_NAME_RE = re.compile(r"(?<![/\w-])([a-z0-9]+(?:-[a-z0-9]+)+)(?![/\w-])")
+_NAMED_SCOPE_RE = re.compile(
+    r"(?<![/\w-])([a-z0-9][a-z0-9_-]{2,})\s+(?:servis\w*|service\w*|log\w*|grub\w*|grup\w*|pod\w*)",
+    re.I,
+)
+
+
 def infer_keywords_from_message(message: str) -> list[str]:
     lowered = message.lower()
     mapping = [
@@ -2417,13 +2709,104 @@ def infer_keywords_from_message(message: str) -> list[str]:
         (r"\balb\b|load\s*balancer", "alb"),
         (r"cloudfront", "cloudfront"),
         (r"codebuild", "codebuild"),
-        (r"\beks\b", "containerinsights"),
+        (r"\beks\b|kubernetes|\bk8s\b", "containerinsights"),
     ]
     found: list[str] = []
     for pattern, keyword in mapping:
         if re.search(pattern, lowered):
             found.append(keyword)
+
+    # Service names the user typed ("plt-comm-order servisinde", "debezium loglarında") must
+    # scope the search; otherwise an LLM that drops them returns an unrelated system-wide table.
+    path_text = " ".join(extract_log_group_paths(message)).lower()
+    candidates = _HYPHENATED_NAME_RE.findall(lowered) + _NAMED_SCOPE_RE.findall(lowered)
+    for token in candidates:
+        token = token.strip("-_")
+        if (
+            len(token) < 3
+            or token in _SCOPE_STOPWORDS
+            or token.isdigit()
+            or re.fullmatch(r"\d+[a-z]{0,3}", token)
+            or token in path_text
+            or token in {"api-gateway", "api-gw"}
+        ):
+            continue
+        if token not in found:
+            found.append(token)
     return found
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def time_window_args(window: TimeWindow | None) -> dict[str, Any]:
+    """Tool time arguments for a parsed window (rolling hours, minutes, or fixed calendar range)."""
+    if window is None:
+        return {"hours": 1}
+    if window.is_fixed:
+        return {
+            "hours": window.hours,
+            "start_time": _iso(window.start),
+            "end_time": _iso(window.end),
+            "period_label": window.label,
+        }
+    if window.is_sub_hour_precision:
+        return {"hours": window.hours, "minutes": window.minutes}
+    return {"hours": window.hours}
+
+
+_PERIOD_LABEL_CALENDAR = (
+    (re.compile(r"geçen\s+hafta|last\s+week", re.I), "last_week"),
+    (re.compile(r"bu\s+hafta|this\s+week", re.I), "this_week"),
+    (re.compile(r"dün|dun\b|yesterday", re.I), "yesterday"),
+    (re.compile(r"bugün|bugun|today", re.I), "today"),
+)
+
+
+def apply_time_window_args(message: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Make the tool window match the user's words; the LLM's own guess only fills gaps."""
+    args = dict(arguments)
+    label = str(args.get("period_label") or "")
+    for pattern, name in _PERIOD_LABEL_CALENDAR:
+        if label and pattern.search(label):
+            # Comparison legs ("Bugün" / "Dün"): exact TR-calendar boundaries, not LLM-guessed UTC.
+            window = calendar_window(name)
+            args.update(time_window_args(window))
+            args["period_label"] = label
+            args.pop("minutes", None)
+            return args
+    if is_comparison_request(message):
+        return args
+
+    window = parse_time_window(message)
+    if window is None:
+        if args.get("start_time") and args.get("end_time"):
+            return args
+        if not args.get("hours"):
+            args["hours"] = 1
+        return args
+    for key in ("start_time", "end_time", "minutes"):
+        args.pop(key, None)
+    if not window.is_fixed:
+        args.pop("period_label", None)
+    args.update(time_window_args(window))
+    return args
+
+
+def apply_ctx_window(tool_args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Follow-ups that keep the previous window reuse its exact range (e.g. "dün", "son 30 dakika")."""
+    if int(tool_args.get("hours") or 0) != int(ctx.get("hours") or 0):
+        return tool_args
+    if ctx.get("start_time") and ctx.get("end_time") and ctx.get("window_label"):
+        tool_args.update(
+            start_time=ctx["start_time"],
+            end_time=ctx["end_time"],
+            period_label=ctx["window_label"],
+        )
+    elif ctx.get("window_minutes"):
+        tool_args["minutes"] = int(ctx["window_minutes"])
+    return tool_args
 
 
 def adjust_search_logs_args(message: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -2437,11 +2820,12 @@ def adjust_search_logs_args(message: str, arguments: dict[str, Any]) -> dict[str
 
     if is_log_analysis_request(message):
         args["response_mode"] = "analysis"
+    elif re.search(r"detay\s*istemiyorum|sadece\s+say[ıi]|count\s+only", message, re.I):
+        # Explicit user wording wins over the model's choice.
+        args["response_mode"] = "count_only"
     elif not args.get("response_mode"):
         if re.search(r"kaç\s+tane\s+log\s+grub|kaç\s+log\s+grub", message, re.I):
             args["response_mode"] = "summary"
-        elif re.search(r"detay\s*istemiyorum|sadece\s+say[ıi]|count\s+only", message, re.I):
-            args["response_mode"] = "count_only"
         elif re.search(
             r"sistemde|tüm\s+log|sayıları\s+göster|en\s+çok|hangi\s+log\s+gru|top\s+\d+",
             message,
@@ -2479,10 +2863,7 @@ def adjust_search_logs_args(message: str, arguments: dict[str, Any]) -> dict[str
         if keywords and not args.get("log_group_name_keywords"):
             args["log_group_name_keywords"] = keywords
 
-    if has_explicit_time_window(message):
-        args["hours"] = parse_hours_from_message(message)
-    elif "hours" not in args or args.get("hours") in (None, 1):
-        args["hours"] = parse_hours_from_message(message)
+    args = apply_time_window_args(message, args)
 
     max_lines = int(args.get("max_result_lines") or 50)
     args["max_result_lines"] = min(200, max(50, max_lines))
@@ -2517,10 +2898,7 @@ def adjust_query_log_group_args(message: str, arguments: dict[str, Any]) -> dict
     if tenant:
         args["tenant_filter"] = tenant
 
-    if has_explicit_time_window(message):
-        args["hours"] = parse_hours_from_message(message)
-    elif "hours" not in args or args.get("hours") in (None, 1):
-        args["hours"] = parse_hours_from_message(message)
+    args = apply_time_window_args(message, args)
 
     max_lines = int(args.get("max_result_lines") or 50)
     if args.get("response_mode") == "analysis":
@@ -2660,13 +3038,37 @@ def compact_tool_result_for_context(tool_name: str, tool_result: str) -> str:
             return trim_message_content(tool_result, max_chars=MAX_TOOL_RESULT_CHARS)
         if isinstance(data, dict):
             results = data.get("results") or []
+            # Tools return already-formatted dict rows; raw Insights rows are lists.
+            rows = [
+                {k: (v[:300] if k == "message" else v) for k, v in row.items() if v}
+                if isinstance(row, dict)
+                else row
+                for row in results[:20]
+            ]
+            if any(isinstance(row, list) for row in rows):
+                rows = srv.format_insights_rows(results, limit=20)
             payload = {
-                "status": data.get("status"),
-                "log_groups_searched": data.get("log_groups_searched"),
-                "match_count": data.get("match_count", len(results)),
-                "results": srv.format_insights_rows(results, limit=20),
-                "truncated": len(results) > 20,
+                key: data.get(key)
+                for key in (
+                    "status",
+                    "log_group_name",
+                    "search_filter",
+                    "hours",
+                    "window_label",
+                    "start_time",
+                    "end_time",
+                    "period_label",
+                    "scope",
+                    "log_groups_searched",
+                    "groups_with_matches",
+                    "status_breakdown",
+                )
+                if data.get(key) not in (None, "", [])
             }
+            payload["match_count"] = data.get("match_count", len(results))
+            payload["rows_returned"] = len(results)
+            payload["results"] = rows
+            payload["truncated"] = bool(data.get("truncated")) or len(results) > 20
             if data.get("error"):
                 payload["error"] = data["error"]
             return json.dumps(payload, ensure_ascii=False)
@@ -3241,13 +3643,14 @@ async def run_http_status_search(
     if not is_http_status_search(message):
         return None
 
-    search_filter = infer_log_search_filter(message)
-    tool_args = {
-        "search_filter": search_filter,
-        "hours": parse_hours_from_message(message),
-        "response_mode": "summary",
-        "max_result_lines": 50,
-    }
+    # Same argument normalisation as the LLM path: named services scope the search,
+    # "detay istemiyorum" → count_only, tenant and time window from the user's words.
+    tool_args = adjust_search_logs_args(
+        message,
+        {"search_filter": infer_log_search_filter(message)},
+    )
+    if tool_args.get("response_mode") in (None, "detail"):
+        tool_args["response_mode"] = "summary"
     try:
         tool_result = await mcp_session.call_tool("search_logs_across_groups", tool_args)
     except Exception as exc:
@@ -3280,7 +3683,7 @@ async def run_named_log_group_query(
 
     tool_args = {
         "log_group_name": paths[0],
-        "hours": parse_hours_from_message(message),
+        **time_window_args(parse_time_window(message)),
         "search_filter": infer_log_search_filter(message),
     }
     tenant = extract_tenant_filter(message)
@@ -3327,7 +3730,7 @@ async def run_scoped_log_search_without_group(
     keywords = infer_keywords_from_message(message) or ["apigateway"]
     tool_args: dict[str, Any] = {
         "search_filter": infer_log_search_filter(message),
-        "hours": parse_hours_from_message(message),
+        **time_window_args(parse_time_window(message)),
         "log_group_name_keywords": keywords,
     }
     if tenant:
@@ -3392,6 +3795,7 @@ async def run_scope_uniqueness_followup(
         "response_mode": "summary",
         "max_result_lines": 50,
     }
+    apply_ctx_window(tool_args, ctx)
     tenant = extract_tenant_filter(message) or str(ctx.get("tenant_filter") or "") or None
     if tenant:
         tool_args["tenant_filter"] = tenant
@@ -3524,6 +3928,7 @@ async def run_log_filter_refinement_followup(
         "response_mode": "detail",
         "max_result_lines": max_lines,
     }
+    apply_ctx_window(tool_args, ctx)
     tenant = extract_tenant_filter(message) or str(ctx.get("tenant_filter") or "") or None
     if tenant:
         tool_args["tenant_filter"] = tenant
@@ -3575,6 +3980,7 @@ async def run_log_export_followup(
         "response_mode": "detail",
         "max_result_lines": min(_MAX_RESULT_LINES, max_lines),
     }
+    apply_ctx_window(tool_args, ctx)
     tenant = extract_tenant_filter(message) or str(ctx.get("tenant_filter") or "") or None
     if tenant:
         tool_args["tenant_filter"] = tenant
@@ -3871,6 +4277,7 @@ async def run_delegated_log_existence_check(
         "response_mode": "summary",
         "max_result_lines": 50,
     }
+    apply_ctx_window(tool_args, ctx)
     tenant = str(ctx.get("tenant_filter") or "") or None
     if tenant:
         tool_args["tenant_filter"] = tenant
@@ -4104,12 +4511,18 @@ async def run_ecs_metric_analysis(
     if not is_ecs_metric_request(message):
         return None
 
-    hours = parse_hours_from_message(message)
+    window = parse_time_window(message)
     end_dt = _srv().utc_now()
-    start_dt = end_dt - timedelta(hours=hours)
+    if window is not None and window.is_fixed:
+        start_dt, end_dt = window.start, window.end
+    else:
+        start_dt = end_dt - timedelta(minutes=window.minutes if window else 60)
+    span_hours = (end_dt - start_dt).total_seconds() / 3600
+    period = 300 if span_hours <= 24 else 3600
     metrics = ecs_metrics_from_message(message)
     tool_calls: list[dict[str, Any]] = []
     sections: list[str] = []
+    last_result = ""
 
     for namespace, metric_name in metrics:
         tool_args = {
@@ -4117,8 +4530,8 @@ async def run_ecs_metric_analysis(
             "metric_name": metric_name,
             "start_time": _srv().iso_utc(start_dt),
             "end_time": _srv().iso_utc(end_dt),
-            "statistic": "Average",
-            "period": 300,
+            "statistic": _srv().default_statistic_for_metric(metric_name),
+            "period": period,
         }
         try:
             tool_result = await mcp_session.call_tool("analyze_metric", tool_args)
@@ -4131,12 +4544,26 @@ async def run_ecs_metric_analysis(
         tool_calls.append({"name": "analyze_metric", "arguments": tool_args})
         direct = try_direct_tool_response("analyze_metric", tool_result)
         sections.append(direct or tool_result)
+        last_result = tool_result
 
-    return {
+    result = {
         "response": "\n\n".join(sections),
         "tool_calls": tool_calls,
         "iterations": 1,
     }
+    if len(metrics) == 1 and len(sections) == 1:
+        result = attach_log_context(result, "analyze_metric", last_result)
+    return result
+
+
+def current_time_note() -> str:
+    """The model has no clock; give it "now" so comparison windows use real dates."""
+    now_utc = datetime.now(timezone.utc)
+    local = now_utc.astimezone(display_timezone())
+    return (
+        f"[Current time] {local:%Y-%m-%d %H:%M} Europe/Istanbul (UTC{local:%z}) = "
+        f"{now_utc:%Y-%m-%dT%H:%M:%SZ}. Calendar words (bugün, dün, bu hafta) mean Europe/Istanbul days."
+    )
 
 
 async def run_agent(
@@ -4172,7 +4599,10 @@ async def _run_agent_core(
     _retry_without_history: bool = False,
 ) -> dict[str, Any]:
     tools = await get_openai_tools()
-    messages: list[dict[str, Any]] = [{"role": "system", "content": get_system_prompt()}]
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": get_system_prompt()},
+        {"role": "system", "content": current_time_note()},
+    ]
 
     trimmed_history = [] if _retry_without_history else trim_conversation_history(conversation_history)
     if trimmed_history:

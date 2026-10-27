@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CloudWatch Agent</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2224%22 fill=%22%23ff9900%22/><text x=%2250%22 y=%2268%22 font-size=%2256%22 text-anchor=%22middle%22>☁</text></svg>" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -983,6 +984,271 @@
 
     .chat-view.hidden { display: none !important; }
     .input-area.hidden { display: none !important; }
+
+    /* ------------------------------------------------------------------
+       Smart answer cards, suggestions, trace, loader, welcome, light theme
+       ------------------------------------------------------------------ */
+    :root {
+      --card-bg: linear-gradient(160deg, rgba(28,36,48,.92), rgba(18,24,32,.92));
+      --card-border: rgba(255,153,0,.18);
+      --glow: 0 0 0 1px rgba(255,153,0,.08), 0 18px 48px -18px rgba(255,153,0,.25);
+      --bar-track: rgba(255,255,255,.05);
+      --bar-fill: linear-gradient(90deg, #ff9900, #ffb84d);
+      --danger: #f87171;
+      --warn: #fbbf24;
+      --info: #60a5fa;
+      --strong: #f0c674;
+      --header-bg: rgba(21,27,35,.55);
+      --input-bg: rgba(21,27,35,.82);
+    }
+
+    :root[data-theme="light"] {
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-2: #eef2f8;
+      --border: #d8e0ec;
+      --text: #0f1b2d;
+      --muted: #5b6b82;
+      --user: #e6f0ff;
+      --assistant: #ffffff;
+      --tool: #f3eefc;
+      --card-bg: linear-gradient(160deg, #ffffff, #f7f9fd);
+      --card-border: rgba(255,153,0,.35);
+      --glow: 0 0 0 1px rgba(255,153,0,.12), 0 18px 40px -22px rgba(15,27,45,.35);
+      --bar-track: rgba(15,27,45,.06);
+      --strong: #b45309;
+      --header-bg: rgba(255,255,255,.75);
+      --input-bg: rgba(255,255,255,.9);
+      --shadow: 0 8px 28px rgba(15,27,45,.12);
+    }
+    :root[data-theme="light"] body {
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(255,153,0,.14), transparent),
+        radial-gradient(ellipse 60% 40% at 100% 100%, rgba(96,165,250,.16), transparent);
+    }
+    :root[data-theme="light"] .msg.user .bubble { border-color: #b9d3fb; }
+    :root[data-theme="light"] .msg.assistant .bubble { border-color: var(--border); box-shadow: var(--shadow); }
+    :root[data-theme="light"] .bubble pre { background: #f1f4f9; }
+    :root[data-theme="light"] #sendBtn { color: #1a1206; }
+    :root[data-theme="light"] .sidebar { background: rgba(255,255,255,.72); }
+    :root[data-theme="light"] .md-code { background: #f1f4f9; color: #b45309; }
+    :root[data-theme="light"] .md-table th { background: #eef2f8; }
+    :root[data-theme="light"] .log-report-header { background: linear-gradient(135deg, rgba(255,153,0,.12), rgba(15,27,45,.03)); }
+    :root[data-theme="light"] .log-card { background: #ffffff; }
+    :root[data-theme="light"] .log-card-top { background: #f4f6fa; }
+    :root[data-theme="light"] .log-card-preview { border-top-color: var(--border); }
+    :root[data-theme="light"] .log-badge-err { color: #b91c1c; }
+    :root[data-theme="light"] .log-badge-warn { color: #92400e; }
+    :root[data-theme="light"] .log-badge-ok { color: #15803d; }
+    :root[data-theme="light"] .log-badge-info,
+    :root[data-theme="light"] .export-json-btn,
+    :root[data-theme="light"] .log-card-method { color: #1d4ed8; }
+    :root[data-theme="light"] .error-table .col-group { color: #1d4ed8; }
+    :root[data-theme="light"] .error-detail-modal { background: rgba(15,27,45,.35); }
+
+    body { transition: background-color .3s ease, color .3s ease; }
+    .bubble strong { color: var(--strong); }
+    .chat-header { background: var(--header-bg); }
+    .input-area { background: var(--input-bg); border-top-color: transparent; }
+    .input-wrap {
+      border-radius: 16px;
+      box-shadow: 0 10px 30px -18px rgba(0,0,0,.6);
+      transition: border-color .15s, box-shadow .2s;
+    }
+    .input-wrap:focus-within { box-shadow: 0 0 0 4px rgba(255,153,0,.12), 0 10px 30px -18px rgba(0,0,0,.6); }
+    #sendBtn { border-radius: 12px; box-shadow: 0 6px 18px -8px rgba(255,153,0,.7); }
+    .msg.assistant { max-width: min(92%, 860px); }
+
+    .theme-toggle {
+      width: 36px; height: 36px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+      cursor: pointer; font-size: 1rem; display: grid; place-items: center;
+      transition: transform .15s, border-color .15s;
+    }
+    .theme-toggle:hover { transform: rotate(-12deg); border-color: var(--accent); }
+
+    /* --- card shell --- */
+    .smart-card {
+      position: relative;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1rem 1.1rem .9rem;
+      box-shadow: var(--glow);
+      overflow: hidden;
+      animation: cardIn .45s cubic-bezier(.2,.8,.2,1) both;
+    }
+    .smart-card::before {
+      content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: .7;
+    }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(10px) scale(.985); }
+      to { opacity: 1; transform: none; }
+    }
+    .sc-head { display: flex; justify-content: space-between; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
+    .sc-title { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+    .sc-badges { display: flex; gap: .35rem; flex-wrap: wrap; }
+    .sc-badge {
+      font-size: .7rem; padding: .2rem .55rem; border-radius: 999px;
+      background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+      white-space: nowrap;
+    }
+    .sc-badge.accent { color: var(--accent); border-color: rgba(255,153,0,.35); background: rgba(255,153,0,.08); }
+    .sc-badge.ok { color: var(--success); border-color: rgba(61,214,140,.35); background: rgba(61,214,140,.08); }
+    .sc-hero { display: flex; align-items: baseline; gap: .6rem; margin: .55rem 0 .2rem; flex-wrap: wrap; }
+    .sc-number {
+      font-size: 2.3rem; font-weight: 700; letter-spacing: -.02em; line-height: 1;
+      background: linear-gradient(135deg, var(--text), var(--accent));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      font-variant-numeric: tabular-nums;
+    }
+    .sc-number-label { color: var(--muted); font-size: .85rem; }
+    .sc-sub { color: var(--muted); font-size: .8rem; margin-bottom: .6rem; word-break: break-all; }
+    .sc-sub code { font-family: "IBM Plex Mono", monospace; color: var(--text); }
+
+    /* --- ranking bars --- */
+    .sc-bars { display: flex; flex-direction: column; gap: .4rem; margin-top: .5rem; }
+    .sc-bar {
+      display: grid; grid-template-columns: minmax(120px, 34%) 1fr auto; gap: .6rem; align-items: center;
+      padding: .3rem .4rem; border-radius: 8px; cursor: pointer; transition: background .15s;
+    }
+    .sc-bar:hover { background: rgba(255,153,0,.07); }
+    .sc-bar-name {
+      font-family: "IBM Plex Mono", monospace; font-size: .75rem; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .sc-bar-track { height: 10px; border-radius: 999px; background: var(--bar-track); overflow: hidden; }
+    .sc-bar-fill {
+      height: 100%; border-radius: 999px; background: var(--bar-fill);
+      transform-origin: left; animation: grow .9s cubic-bezier(.2,.8,.2,1) both;
+    }
+    @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    .sc-bar-count { font-variant-numeric: tabular-nums; font-weight: 600; font-size: .82rem; min-width: 3.5ch; text-align: right; }
+    .sc-more { font-size: .75rem; color: var(--muted); margin-top: .45rem; }
+
+    /* --- status breakdown --- */
+    .sc-stack { display: flex; height: 12px; border-radius: 999px; overflow: hidden; margin: .7rem 0 .45rem; background: var(--bar-track); }
+    .sc-stack span { height: 100%; transform-origin: left; animation: grow .9s cubic-bezier(.2,.8,.2,1) both; }
+    .sc-legend { display: flex; flex-wrap: wrap; gap: .35rem .8rem; font-size: .75rem; color: var(--muted); }
+    .sc-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: .3rem; vertical-align: middle; }
+    .sc-legend b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .c-5xx { background: var(--danger); }
+    .c-4xx { background: var(--warn); }
+    .c-403 { background: #fb923c; }
+    .c-other { background: var(--info); }
+
+    /* --- metric --- */
+    .sc-metric { display: grid; grid-template-columns: auto 1fr; gap: 1rem; align-items: end; }
+    .sc-spark { width: 100%; height: 64px; }
+    .sc-trend { font-size: .78rem; font-weight: 600; padding: .15rem .5rem; border-radius: 999px; }
+    .sc-trend.up { color: var(--danger); background: rgba(248,113,113,.12); }
+    .sc-trend.down { color: var(--success); background: rgba(61,214,140,.12); }
+    .sc-trend.flat { color: var(--muted); background: var(--surface-2); }
+    .sc-stats { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .75rem; color: var(--muted); margin-top: .5rem; }
+    .sc-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+    /* --- empty --- */
+    .sc-empty { display: flex; gap: .8rem; align-items: center; }
+    .sc-empty-icon {
+      width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+      background: rgba(61,214,140,.12); color: var(--success); font-size: 1.3rem; flex-shrink: 0;
+    }
+
+    /* --- trace + raw text + suggestions --- */
+    .sc-trace {
+      margin-top: .75rem; padding-top: .6rem; border-top: 1px dashed var(--border);
+      font-family: "IBM Plex Mono", monospace; font-size: .7rem; color: var(--muted);
+      display: flex; flex-wrap: wrap; gap: .25rem .9rem;
+    }
+    .sc-trace span::before { content: "•"; margin-right: .4rem; color: var(--accent); }
+    .sc-trace span:first-child::before { content: "⚙"; }
+    .raw-text { margin-top: .6rem; }
+    .raw-text > summary {
+      cursor: pointer; font-size: .75rem; color: var(--muted); list-style: none; user-select: none;
+    }
+    .raw-text > summary::-webkit-details-marker { display: none; }
+    .raw-text > summary::before { content: "▸ "; }
+    .raw-text[open] > summary::before { content: "▾ "; }
+    .raw-text[open] > summary { margin-bottom: .4rem; }
+
+    .suggestions { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .65rem; }
+    .msg.assistant:not(:last-child) .suggestions { display: none; }
+    .chip {
+      font-family: inherit; font-size: .78rem; color: var(--text);
+      background: var(--surface-2); border: 1px solid var(--border);
+      padding: .38rem .75rem; border-radius: 999px; cursor: pointer;
+      transition: border-color .15s, transform .15s, background .15s;
+      animation: cardIn .4s ease both;
+    }
+    .chip::before { content: "↳ "; color: var(--accent); }
+    .chip:hover { border-color: var(--accent); background: rgba(255,153,0,.08); transform: translateY(-1px); }
+
+    /* --- loader --- */
+    .thinking {
+      align-self: flex-start; display: flex; align-items: center; gap: .7rem;
+      padding: .75rem 1rem; border-radius: 14px; border: 1px solid var(--border);
+      background: var(--surface); font-size: .82rem; color: var(--muted);
+      animation: fadeIn .3s ease;
+    }
+    .thinking-orb {
+      width: 18px; height: 18px; border-radius: 50%;
+      background: conic-gradient(from 0deg, var(--accent), transparent 70%);
+      animation: spin 1s linear infinite;
+      -webkit-mask: radial-gradient(circle 6px, transparent 98%, #000 100%);
+      mask: radial-gradient(circle 6px, transparent 98%, #000 100%);
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .thinking-text {
+      background: linear-gradient(90deg, var(--muted) 0%, var(--text) 50%, var(--muted) 100%);
+      background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+      animation: shimmer 1.6s linear infinite;
+    }
+    @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+    /* --- welcome --- */
+    .welcome-hero { text-align: center; padding: 2.5rem 1rem 1.25rem; }
+    .welcome-hero .orb {
+      width: 64px; height: 64px; margin: 0 auto 1rem; border-radius: 20px; display: grid; place-items: center;
+      font-size: 1.8rem; background: radial-gradient(circle at 30% 30%, #ffc266, #ff9900 55%, #b35f00);
+      box-shadow: 0 18px 50px -12px rgba(255,153,0,.6); animation: float 4s ease-in-out infinite;
+    }
+    @keyframes float { 50% { transform: translateY(-6px); } }
+    .welcome-hero h3 { font-size: 1.5rem; color: var(--text); margin-bottom: .4rem; letter-spacing: -.01em; }
+    .welcome-hero p { color: var(--muted); font-size: .9rem; max-width: 520px; margin: 0 auto; }
+    .welcome-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: .7rem;
+      max-width: 760px; margin: 1.25rem auto 0; padding: 0 .5rem;
+    }
+    .welcome-card {
+      text-align: left; font-family: inherit; color: var(--text); cursor: pointer;
+      background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px;
+      padding: .85rem .95rem; transition: border-color .15s, transform .15s, box-shadow .2s;
+      animation: cardIn .5s ease both;
+    }
+    .welcome-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--glow); }
+    .welcome-card .wc-icon { font-size: 1.1rem; }
+    .welcome-card .wc-title { font-weight: 600; font-size: .85rem; margin: .35rem 0 .15rem; }
+    .welcome-card .wc-sub { color: var(--muted); font-size: .75rem; }
+
+    /* Compact tool catalog: two-line descriptions, full text on hover. */
+    .tools-panel-list { max-height: 300px; overflow-y: auto; padding-right: .2rem; }
+    .tools-tooltip-item span {
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      font-size: .72rem; line-height: 1.4;
+    }
+    .tools-tooltip-item:hover span { -webkit-line-clamp: unset; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .smart-card, .sc-bar-fill, .sc-stack span, .chip, .welcome-card, .welcome-hero .orb, .thinking-orb, .thinking-text { animation: none !important; }
+    }
+    @media (max-width: 640px) {
+      .sc-bar { grid-template-columns: 1fr auto; }
+      .sc-bar-track { grid-column: 1 / -1; grid-row: 2; }
+      .sc-metric { grid-template-columns: 1fr; }
+      .msg, .msg.assistant { max-width: 100%; }
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -1045,14 +1311,34 @@
             <h2 id="chatTitle">Observability Chat</h2>
             <p id="chatSubtitle">Doğal dilde sor, agent CloudWatch tool'larını çağırsın</p>
           </div>
-          <button class="prompt-btn" id="toggleSidebarBtn" style="width:auto;margin:0;padding:.5rem .7rem;font-size:.75rem;">Paneli Kapat</button>
+          <div style="display:flex;gap:.5rem;align-items:center;">
+            <button type="button" class="theme-toggle" id="themeToggle" title="Tema değiştir" aria-label="Tema değiştir">☾</button>
+            <button class="prompt-btn" id="toggleSidebarBtn" style="width:auto;margin:0;padding:.5rem .7rem;font-size:.75rem;">Paneli Kapat</button>
+          </div>
         </div>
       </header>
 
       <div class="messages chat-view" id="messages">
-        <div class="welcome" id="welcome">
-          <h3>Merhaba 👋</h3>
-          <p>CloudWatch log, metric ve alarm sorularını sorabilirsin. Agent LLM ile tool seçip AWS'den veri çeker.</p>
+          <div class="welcome" id="welcome">
+          <div class="welcome-hero">
+            <div class="orb">☁</div>
+            <h3>CloudWatch'a doğal dilde sor</h3>
+            <p>Agent doğru tool'u seçer, tüm log gruplarını paralel tarar ve cevabı gerçek AWS verisiyle doğrulanmış bir kart olarak getirir.</p>
+          </div>
+          <div class="welcome-grid">
+            <button type="button" class="welcome-card" data-suggest="Son 6 saatte hangi log grubunda en çok error var? Top 5 göster">
+              <div class="wc-icon">🔥</div><div class="wc-title">En çok hata veren servisler</div><div class="wc-sub">Son 6 saat · tüm sistem</div>
+            </button>
+            <button type="button" class="welcome-card" data-suggest="/aws/apigateway/era-api-gateway-dev/access-logs son 12 saatte kaç hata almış">
+              <div class="wc-icon">🚦</div><div class="wc-title">API Gateway hata dağılımı</div><div class="wc-sub">4xx / 5xx kırılımıyla</div>
+            </button>
+            <button type="button" class="welcome-card" data-suggest="API Gateway 5xx metriği son 24 saatte nasıl?">
+              <div class="wc-icon">📈</div><div class="wc-title">5xx metrik trendi</div><div class="wc-sub">Son 24 saat · sparkline</div>
+            </button>
+            <button type="button" class="welcome-card" data-suggest="Dün api gateway access loglarında kaç tane 500 hatası oldu?">
+              <div class="wc-icon">🗓</div><div class="wc-title">Dün kaç 500 oldu?</div><div class="wc-sub">İstanbul takvim günü</div>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1443,8 +1729,25 @@
       if (!chat || !chat.history.length) {
         messagesEl.innerHTML = `
           <div class="welcome" id="welcome">
-            <h3>Merhaba 👋</h3>
-            <p>CloudWatch log, metric ve alarm sorularını sorabilirsin. Agent LLM ile tool seçip AWS'den veri çeker.</p>
+            <div class="welcome-hero">
+              <div class="orb">☁</div>
+              <h3>CloudWatch'a doğal dilde sor</h3>
+              <p>Agent doğru tool'u seçer, tüm log gruplarını paralel tarar ve cevabı gerçek AWS verisiyle doğrulanmış bir kart olarak getirir.</p>
+            </div>
+            <div class="welcome-grid">
+              <button type="button" class="welcome-card" data-suggest="Son 6 saatte hangi log grubunda en çok error var? Top 5 göster">
+                <div class="wc-icon">🔥</div><div class="wc-title">En çok hata veren servisler</div><div class="wc-sub">Son 6 saat · tüm sistem</div>
+              </button>
+              <button type="button" class="welcome-card" data-suggest="/aws/apigateway/era-api-gateway-dev/access-logs son 12 saatte kaç hata almış">
+                <div class="wc-icon">🚦</div><div class="wc-title">API Gateway hata dağılımı</div><div class="wc-sub">4xx / 5xx kırılımıyla</div>
+              </button>
+              <button type="button" class="welcome-card" data-suggest="API Gateway 5xx metriği son 24 saatte nasıl?">
+                <div class="wc-icon">📈</div><div class="wc-title">5xx metrik trendi</div><div class="wc-sub">Son 24 saat · sparkline</div>
+              </button>
+              <button type="button" class="welcome-card" data-suggest="Dün api gateway access loglarında kaç tane 500 hatası oldu?">
+                <div class="wc-icon">🗓</div><div class="wc-title">Dün kaç 500 oldu?</div><div class="wc-sub">İstanbul takvim günü</div>
+              </button>
+            </div>
           </div>`;
       } else {
         chat.history.forEach(msg => addMessage(msg.role, msg.content, msg.extras || {}, false, chat.id));
@@ -1604,6 +1907,11 @@
         const cls = /AUTHORIZER|ACCESS_DENIED/i.test(errType) ? "log-badge-warn" : "log-badge-err";
         badges.push(`<span class="log-badge ${cls}">${escapeHtml(errType)}</span>`);
       }
+      const level = String(data.l || data.level || data.Level || data.severity || "").trim();
+      if (level) {
+        const cls = /err|fatal|crit/i.test(level) ? "log-badge-err" : /warn/i.test(level) ? "log-badge-warn" : "log-badge-info";
+        badges.push(`<span class="log-badge ${cls}">${escapeHtml(level.toUpperCase())}</span>`);
+      }
       if (badges.length) return badges.join("");
       return `<span class="log-badge log-badge-info">Kayıt</span>`;
     }
@@ -1621,7 +1929,10 @@
       const method = String(d.httpMethod || "").trim();
       const path = String(d.path || d.resourcePath || "").trim();
       const tenant = d.tenantDomain && d.tenantDomain !== "-" ? d.tenantDomain : "";
-      const rawMessage = String(d._rawMessage || d.errorMessage || "").trim();
+      // Access logs carry errorMessage; app logs use m / message / msg / log (Serilog, Python, stdout).
+      const pick = (...keys) => keys.map(k => d[k]).find(v => typeof v === "string" && v.trim() && v.trim() !== "-");
+      const rawMessage = String(pick("_rawMessage", "errorMessage", "m", "message", "msg", "log", "mt") || "").trim();
+      const exception = String(pick("x", "exception", "Exception", "stack_trace") || "").trim();
       const fields = [
         ["Tenant", tenant],
         ["IP", d.ip],
@@ -1641,8 +1952,10 @@
         ? `<div class="log-card-path">${method ? `<span class="log-card-method">${escapeHtml(method)}</span>` : ""}${escapeHtml(path)}</div>`
         : "";
 
-      const previewHtml = (!method && !path && rawMessage)
-        ? `<div class="log-card-preview">${escapeHtml(rawMessage.slice(0, 320))}</div>`
+      const previewHtml = (!method && !path && (rawMessage || exception))
+        ? `<div class="log-card-preview">${escapeHtml(rawMessage.slice(0, 400))}${
+            exception ? `<div style="margin-top:.35rem;color:var(--danger);font-family:'IBM Plex Mono',monospace;font-size:.72rem">${escapeHtml(exception.split("\n")[0].slice(0, 240))}</div>` : ""
+          }</div>`
         : "";
 
       return `
@@ -1914,6 +2227,202 @@
       return d.innerHTML;
     }
 
+    // ------------------------------------------------------------------
+    // Smart answer cards (rendered from the structured `card` payload)
+    // ------------------------------------------------------------------
+    const nf = new Intl.NumberFormat("tr-TR");
+    const fmtNum = n => nf.format(Math.round(Number(n) || 0));
+    const CARD_REPLACES_TEXT = new Set(["ranking", "count", "empty", "metric"]);
+
+    function fmtBytes(bytes) {
+      const b = Number(bytes) || 0;
+      if (!b) return "";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      const i = Math.min(units.length - 1, Math.floor(Math.log(b) / Math.log(1024)));
+      return `${(b / 1024 ** i).toFixed(i >= 3 ? 2 : 0)} ${units[i]}`;
+    }
+
+    function fmtWhen(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso || "");
+      return d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function shortGroup(name) {
+      const parts = String(name || "").replace(/^\d{12}:/, "").split("/").filter(Boolean);
+      return parts.length > 2 ? parts.slice(-2).join("/") : parts.join("/") || String(name || "");
+    }
+
+    function scopeBadge(card) {
+      if (card.scope === "system") return `<span class="sc-badge accent">◎ Tüm sistem · ${fmtNum(card.groups_searched)} grup</span>`;
+      if (card.scope === "keywords") {
+        const kw = (card.keywords || []).join(", ");
+        return `<span class="sc-badge accent">⌕ ${escapeHtml(kw)} · ${fmtNum(card.groups_searched)} grup</span>`;
+      }
+      if (card.scope === "explicit") return `<span class="sc-badge">${fmtNum(card.groups_searched)} grup</span>`;
+      if (card.log_group) return `<span class="sc-badge" title="${escapeHtml(card.log_group)}">▤ ${escapeHtml(shortGroup(card.log_group))}</span>`;
+      return "";
+    }
+
+    function cardBadges(card) {
+      const parts = [`<span class="sc-badge">⏱ ${escapeHtml(card.window || "")}</span>`, scopeBadge(card)];
+      if (card.tenant) parts.push(`<span class="sc-badge">tenant · ${escapeHtml(card.tenant)}</span>`);
+      return `<div class="sc-badges">${parts.join("")}</div>`;
+    }
+
+    function cardTrace(card, extras) {
+      const items = [escapeHtml(card.tool || "")];
+      if (card.groups_searched) items.push(`${fmtNum(card.groups_searched)} log grubu`);
+      if (card.batches > 1) items.push(`${card.batches} paralel batch`);
+      if (card.bytes_scanned) items.push(`${fmtBytes(card.bytes_scanned)} tarandı`);
+      if (card.aggregation === "account-wide") items.push("hesap geneli (çift sayımsız)");
+      if (extras.elapsed) items.push(`${extras.elapsed} sn`);
+      return `<div class="sc-trace">${items.map(i => `<span>${i}</span>`).join("")}</div>`;
+    }
+
+    function countUp(value, animate) {
+      const v = Math.round(Number(value) || 0);
+      return animate
+        ? `<span class="sc-number" data-countup="${v}">0</span>`
+        : `<span class="sc-number">${fmtNum(v)}</span>`;
+    }
+
+    function statusClass(code) {
+      const c = String(code);
+      if (c.startsWith("5")) return "c-5xx";
+      if (c === "403") return "c-403";
+      if (c.startsWith("4")) return "c-4xx";
+      return "c-other";
+    }
+
+    function renderStatusBreakdown(items) {
+      if (!items?.length) return "";
+      const total = items.reduce((sum, i) => sum + (Number(i.count) || 0), 0) || 1;
+      const segments = items.map((i, idx) =>
+        `<span class="${statusClass(i.status)}" style="width:${(i.count / total * 100).toFixed(2)}%;animation-delay:${idx * 60}ms" title="${i.status}: ${fmtNum(i.count)}"></span>`
+      ).join("");
+      const legend = items.map(i =>
+        `<span><i class="${statusClass(i.status)}"></i>${i.status} <b>${fmtNum(i.count)}</b></span>`
+      ).join("");
+      return `<div class="sc-title" style="margin-top:.4rem">HTTP 4xx / 5xx dağılımı</div>
+        <div class="sc-stack">${segments}</div><div class="sc-legend">${legend}</div>`;
+    }
+
+    function renderSparkline(series, rising) {
+      const values = (series || []).map(p => Number(p[1]) || 0);
+      if (values.length < 2) return "";
+      const w = 300, h = 64, pad = 4;
+      const max = Math.max(...values), min = Math.min(...values);
+      const span = max - min || 1;
+      const pts = values.map((v, i) => [
+        pad + (i / (values.length - 1)) * (w - pad * 2),
+        h - pad - ((v - min) / span) * (h - pad * 2),
+      ]);
+      const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+      const area = `${line} L${pts.at(-1)[0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z`;
+      const color = rising ? "var(--danger)" : "var(--accent)";
+      const id = "g" + Math.random().toString(36).slice(2, 8);
+      return `<svg class="sc-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/>
+        </linearGradient></defs>
+        <path d="${area}" fill="url(#${id})"/>
+        <path d="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      </svg>`;
+    }
+
+    function renderSmartCard(card, extras, animate) {
+      const titleStyle = card.kind === "metric" ? ' style="text-transform:none;letter-spacing:.02em"' : "";
+      const head = `<div class="sc-head"><div class="sc-title"${titleStyle}>${escapeHtml(card.filter_label || card.title || "")}</div>${card.kind === "metric" ? "" : cardBadges(card)}</div>`;
+      let body = "";
+
+      if (card.kind === "ranking") {
+        const max = Math.max(...card.top.map(t => t.count), 1);
+        const bars = card.top.map((t, i) => `
+          <div class="sc-bar" data-suggest="${i + 1} numarayı detaylı göster" title="${escapeHtml(t.group)} — detay için tıkla">
+            <div class="sc-bar-name">${escapeHtml(shortGroup(t.group))}</div>
+            <div class="sc-bar-track"><div class="sc-bar-fill" style="width:${Math.max(2, t.count / max * 100).toFixed(1)}%;animation-delay:${i * 70}ms"></div></div>
+            <div class="sc-bar-count">${fmtNum(t.count)}</div>
+          </div>`).join("");
+        const hidden = card.groups_with_matches - card.top.length;
+        body = `
+          <div class="sc-hero">${countUp(card.total, animate)}<span class="sc-number-label">kayıt · ${fmtNum(card.groups_with_matches)} grupta eşleşme</span></div>
+          <div class="sc-bars">${bars}</div>
+          ${hidden > 0 ? `<div class="sc-more">+${fmtNum(hidden)} grup daha (toplama dahil)</div>` : ""}`;
+      } else if (card.kind === "count") {
+        body = `
+          <div class="sc-hero">${countUp(card.total, animate)}<span class="sc-number-label">eşleşen kayıt</span></div>
+          <div class="sc-sub"><code>${escapeHtml(card.log_group || "")}</code></div>
+          ${renderStatusBreakdown(card.status_breakdown)}`;
+      } else if (card.kind === "empty") {
+        body = `
+          <div class="sc-empty" style="margin-top:.6rem">
+            <div class="sc-empty-icon">✓</div>
+            <div><div style="font-weight:600">Temiz — eşleşme yok</div>
+            <div class="sc-sub" style="margin:0">${escapeHtml(card.window)} içinde ${escapeHtml(card.filter_label)} bulunamadı.</div></div>
+          </div>`;
+      } else if (card.kind === "metric") {
+        if (card.empty) {
+          body = `<div class="sc-sub" style="margin-top:.5rem">Bu aralıkta veri noktası yok.</div>`;
+        } else {
+          const change = card.change_pct;
+          const dir = card.trend === "increasing" ? "up" : card.trend === "decreasing" ? "down" : "flat";
+          const arrow = { up: "↑", down: "↓", flat: "→" }[dir];
+          const label = card.statistic === "Sum" ? "toplam" : "ortalama";
+          const hero = card.statistic === "Sum" ? card.sum : card.average;
+          const heroHtml = card.statistic === "Sum"
+            ? countUp(hero, animate)
+            : `<span class="sc-number">${Number(hero).toFixed(2)}</span>`;
+          body = `
+            <div class="sc-metric" style="margin-top:.5rem">
+              <div>
+                <div class="sc-hero" style="margin:0">${heroHtml}<span class="sc-number-label">${label}</span></div>
+                <span class="sc-trend ${dir}">${arrow} ${change != null ? `${change > 0 ? "+" : ""}${change}%` : escapeHtml(card.trend || "")}</span>
+              </div>
+              ${renderSparkline(card.series, dir === "up" && card.statistic === "Sum")}
+            </div>
+            <div class="sc-stats">
+              <span>min <b>${Number(card.min).toFixed(2)}</b></span>
+              <span>max <b>${Number(card.max).toFixed(2)}</b></span>
+              <span>periyot ort. <b>${Number(card.average).toFixed(2)}</b></span>
+              <span>${fmtNum(card.datapoints)} veri noktası</span>
+            </div>`;
+        }
+        if (card.window) {
+          const [from, to] = String(card.window).split(" → ").map(fmtWhen);
+          body = `<div class="sc-badges" style="margin-top:.45rem"><span class="sc-badge">⏱ ${escapeHtml(from)} → ${escapeHtml(to || "")}</span></div>` + body;
+        }
+      } else if (card.kind === "detail" || card.kind === "analysis") {
+        const shown = card.kind === "detail" && card.shown < card.total
+          ? `<span class="sc-number-label">· en yeni ${fmtNum(card.shown)} satır aşağıda</span>` : "";
+        body = `<div class="sc-hero">${countUp(card.total, animate)}<span class="sc-number-label">eşleşen kayıt</span>${shown}</div>`;
+      }
+
+      return `<div class="smart-card">${head}${body}${cardTrace(card, extras)}</div>`;
+    }
+
+    function renderSuggestions(list) {
+      if (!list?.length) return "";
+      return `<div class="suggestions">${list.map(t =>
+        `<button type="button" class="chip" data-suggest="${escapeHtml(t)}">${escapeHtml(t)}</button>`
+      ).join("")}</div>`;
+    }
+
+    function runCountUps(root) {
+      root.querySelectorAll("[data-countup]").forEach(el => {
+        const target = Number(el.dataset.countup) || 0;
+        const duration = 900;
+        const start = performance.now();
+        const step = now => {
+          const t = Math.min(1, (now - start) / duration);
+          const eased = 1 - Math.pow(1 - t, 3);
+          el.textContent = fmtNum(target * eased);
+          if (t < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      });
+    }
+
     function addMessage(role, content, extras = {}, save = true, targetChatId = null) {
       const chatId = targetChatId || currentChatId;
       const chat = getChatById(chatId);
@@ -1963,28 +2472,59 @@
 
       const exportHtml = role === "assistant" ? renderExportButton(extras.log_export) : "";
 
+      let bodyHtml = role === "assistant" ? formatResponse(content) : escapeHtml(content);
+      let suggestionsHtml = "";
+      const card = role === "assistant" && !extras.error ? extras.card : null;
+      const animate = Boolean(extras.created_at && Date.now() - extras.created_at < 4000);
+      if (card) {
+        const cardHtml = renderSmartCard(card, extras, animate);
+        bodyHtml = CARD_REPLACES_TEXT.has(card.kind)
+          ? `${cardHtml}<details class="raw-text"><summary>Metin görünümü</summary>${bodyHtml}</details>`
+          : `${cardHtml}<div style="margin-top:.75rem">${bodyHtml}</div>`;
+      }
+      if (role === "assistant") suggestionsHtml = renderSuggestions(extras.suggestions);
+
       div.innerHTML = `
         <div class="msg-label">${role === "user" ? "Sen" : "Agent"}</div>
-        <div class="bubble ${extras.error ? "error-bubble" : ""}">
-          ${role === "assistant" ? formatResponse(content) : escapeHtml(content)}
+        <div class="bubble ${extras.error ? "error-bubble" : ""}" ${card ? 'style="background:transparent;border:none;padding:0;box-shadow:none"' : ""}>
+          ${bodyHtml}
           ${exportHtml}
           ${toolsHtml}
-          ${metaTag}
-        </div>`;
+          ${card ? "" : metaTag}
+        </div>
+        ${suggestionsHtml}`;
       messagesEl.appendChild(div);
+      if (animate) runCountUps(div);
       scrollMessagesToBottom(true);
     }
 
+    const THINKING_STEPS = [
+      "Soruyu anlıyorum…",
+      "Doğru CloudWatch tool'unu seçiyorum…",
+      "Log grupları paralel taranıyor…",
+      "Sonuçlar birleştiriliyor ve doğrulanıyor…",
+    ];
+    let thinkingTimer = null;
+
     function showTyping() {
+      hideTyping();
       const div = document.createElement("div");
-      div.className = "typing";
+      div.className = "thinking";
       div.id = "typing";
-      div.innerHTML = "<span></span><span></span><span></span>";
+      div.innerHTML = `<div class="thinking-orb"></div><span class="thinking-text">${THINKING_STEPS[0]}</span>`;
       messagesEl.appendChild(div);
+      let step = 0;
+      thinkingTimer = setInterval(() => {
+        step = Math.min(step + 1, THINKING_STEPS.length - 1);
+        const text = div.querySelector(".thinking-text");
+        if (text) text.textContent = THINKING_STEPS[step];
+      }, 1800);
       scrollMessagesToBottom(true);
     }
 
     function hideTyping() {
+      clearInterval(thinkingTimer);
+      thinkingTimer = null;
       document.getElementById("typing")?.remove();
     }
 
@@ -2056,6 +2596,9 @@
             elapsed,
             log_context: data.log_context || null,
             log_export: data.log_export || null,
+            card: data.card || null,
+            suggestions: data.suggestions || [],
+            created_at: Date.now(),
           },
           true,
           requestChatId
@@ -2089,6 +2632,26 @@
     }
 
     sendBtn.addEventListener("click", () => sendMessage(inputEl.value));
+
+    // Suggestion chips, ranking bars and welcome cards all carry data-suggest.
+    messagesEl.addEventListener("click", (e) => {
+      const target = e.target.closest("[data-suggest]");
+      if (!target || !messagesEl.contains(target)) return;
+      sendMessage(target.dataset.suggest);
+    });
+
+    const THEME_KEY = "cloudwatch-agent-theme";
+    const themeToggle = document.getElementById("themeToggle");
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      themeToggle.textContent = theme === "light" ? "☀" : "☾";
+    }
+    try { applyTheme(localStorage.getItem(THEME_KEY) || "dark"); } catch { applyTheme("dark"); }
+    themeToggle.addEventListener("click", () => {
+      const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+      applyTheme(next);
+      try { localStorage.setItem(THEME_KEY, next); } catch {}
+    });
 
     inputEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {

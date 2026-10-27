@@ -138,3 +138,41 @@ mouse ile üzerine geline tool listesi ui'da gözüküyor
 | `LLM_MAX_TOKENS` | LLM max token | `700` |
 | `LLM_TEMPERATURE` | LLM temperature | `0.1` |
 | `LOG_LEVEL` | Log seviyesi | `INFO` |
+| `DISPLAY_TIMEZONE` | "bugün / dün / bu hafta" takvim sınırları | `Europe/Istanbul` |
+| `SEARCH_MAX_LOG_GROUPS` | Tek aramada taranacak max log group (50'lik batch'lere bölünür) | `500` |
+| `SYSTEM_SCAN_EXCLUDE_PREFIXES` | Sistem çapı aramadan hariç tutulan prefix'ler (virgülle) | `/aws/codebuild/` |
+| `LOG_GROUP_CATALOG_TTL` | Log group kataloğu cache süresi (sn) | `300` |
+| `INSIGHTS_MAX_CONCURRENCY` | Paralel Insights batch sayısı | `8` |
+
+## Cevap doğruluğu — nasıl çalışır
+
+- **Sistem çapı arama** ("sistemde", "hangi log grubunda en çok…") hesaptaki **tüm runtime log
+  gruplarını** tarar (CI/codebuild hariç). Insights tek sorguda 50 grup kabul ettiği için gruplar
+  log class'a göre 50'lik batch'lere bölünür ve paralel çalıştırılır; sonuçlar birleştirilir.
+  Cevapta "Kapsam: tüm sistem — N log grubu tarandı" satırı görünür.
+- **Servis adı** ("plt-comm-order servisinde", "debezium loglarında") aramayı o gruplarla sınırlar.
+- **Detay modunda** gösterilen satırlar bir önizlemedir; başlıktaki sayı ayrı bir `stats count()`
+  sorgusundan gelen **gerçek toplamdır**.
+- **errors** filtresi = uygulama hata kayıtları + tüm HTTP 5xx yanıtları. Access log'larda 4xx/5xx
+  dağılımı ayrıca gösterilir.
+- **Zaman:** "son 6 saatte", "son 2 günde", "son 30 dakikada" gibi Türkçe ekli ifadeler doğru
+  ayrıştırılır; dakika hassasiyeti korunur. "dün" / "bugün" / "geçen hafta" İstanbul takvimine
+  göredir (son 24 saat değil).
+- **Metrikler:** sayaçlar (Errors, Count, 5XXError…) için Sum, gauge'lar (CPU, latency) için
+  Average kullanılır. Boyut verilmezse hesap geneli toplam, çift sayım olmadan
+  (`SCHEMA(namespace, üst-boyut)`) hesaplanır. Trend kronolojik sıradan hesaplanır.
+
+## Testler
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q                                   # unit testler (AWS/LLM gerekmez)
+
+# Canlı servis üzerinde (port-forward açıkken):
+python scripts/sre_chat_test.py http://localhost:8080/chat        # tool seçimi regresyonu
+python scripts/e2e_user_persona_test.py http://localhost:8080/chat # multi-turn persona akışları
+
+# Doğruluk: agent cevaplarını doğrudan CloudWatch sorgularıyla karşılaştırır,
+# her soruyu N kez sorup tutarlılığı ölçer (CloudWatch okuma yetkisi gerekir).
+AWS_PROFILE=<profil> python scripts/ground_truth_check.py --chat-url http://localhost:8080/chat --runs 3
+```

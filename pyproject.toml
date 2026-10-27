@@ -12,6 +12,7 @@ dependencies = [
     "openai>=1.60.0",
     "pydantic>=2.0.0",
     "uvicorn[standard]>=0.30.0",
+    "tzdata>=2024.1",
 ]
 
 [project.scripts]

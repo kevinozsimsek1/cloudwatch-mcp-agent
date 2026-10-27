@@ -232,9 +232,11 @@ CONVERSATION = [
     {
         "name": "C-06 multi-group detail + number pick",
         "turns": [
-            ("400 lü hataları getir son 4 saatde", {"must": [r"400|http_400|739|655"], "tool": "search_logs_across_groups"}),
-            ("detaylı getir", {"must": [r"birden fazla|hangisinin|655"], "must_not": [r"yardımcı olam"]}),
-            ("1 numarayı", {"must": [r"access-logs|655|400|kayıt"], "must_not": [r"yardımcı olam"], "tool": "query_log_group"}),
+            # Live data varies: with several matching groups the agent asks which one, with a single
+            # group it drills straight into detail. Both are correct; hardcoded counts are not.
+            ("400 lü hataları getir son 4 saatde", {"must": [r"400|http_400"], "tool": "search_logs_across_groups"}),
+            ("detaylı getir", {"must": [r"birden fazla|hangisinin|\*\*\d+\*\* kayıt|eşleşen satır bulunamadı"], "must_not": [r"yardımcı olam"]}),
+            ("1 numarayı", {"must": [r"access-logs|400|kayıt"], "must_not": [r"yardımcı olam"], "tool": "query_log_group"}),
         ],
     },
 ]

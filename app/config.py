@@ -27,3 +27,12 @@ ENABLE_MECHANICAL_FALLBACKS = os.getenv("ENABLE_MECHANICAL_FALLBACKS", "false").
     "true",
     "yes",
 }
+DISPLAY_TIMEZONE = os.getenv("DISPLAY_TIMEZONE", "Europe/Istanbul")
+SEARCH_MAX_LOG_GROUPS = int(os.getenv("SEARCH_MAX_LOG_GROUPS", "500"))
+SYSTEM_SCAN_EXCLUDE_PREFIXES = [
+    prefix.strip()
+    for prefix in os.getenv("SYSTEM_SCAN_EXCLUDE_PREFIXES", "/aws/codebuild/").split(",")
+    if prefix.strip()
+]
+LOG_GROUP_CATALOG_TTL = int(os.getenv("LOG_GROUP_CATALOG_TTL", "300"))
+INSIGHTS_MAX_CONCURRENCY = int(os.getenv("INSIGHTS_MAX_CONCURRENCY", "8"))

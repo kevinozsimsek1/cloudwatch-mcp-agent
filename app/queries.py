@@ -41,10 +41,13 @@ _HTTP_2XX_FILTER = (
     "status.?code.?2\\d{2}|HTTP\\/1\\.[01] 2\\d{2}\\b)/\n"
 )
 
+# Application error signals OR any HTTP 5xx response. Access-log lines for backend 500s carry
+# "errorMessage":"-", so without the status clause they were silently excluded from "errors".
 _ERRORS_FILTER = (
-    "| filter @message like /(?i)(\"Level\":\"Error\"|ACCESS_DENIED|errorResponseType|"
-    "Unhandled exception|exception|fatal|stack trace)/\n"
-    "| filter @message not like /\"errorMessage\":\"-\"|\"Level\":\"Information\"/\n"
+    "| filter (@message like /(?i)(\"Level\":\"Error\"|ACCESS_DENIED|errorResponseType|"
+    "Unhandled exception|exception|fatal|stack trace)/ "
+    "and @message not like /\"errorMessage\":\"-\"|\"Level\":\"Information\"/) "
+    "or (status >= 500 and status < 600)\n"
 )
 
 
@@ -131,6 +134,20 @@ def inject_query_filters(query_string: str, *, tenant: str | None = None) -> str
     if insert_pos < len(query_string):
         return f"{query_string[:insert_pos].rstrip()}\n{filter_line}\n{query_string[insert_pos:].lstrip()}"
     return f"{query_string.rstrip()}\n{filter_line}\n"
+
+
+def resolve_count_query(search_filter: LogSearchFilter, *, tenant: str | None = None) -> str:
+    """Total matches for a preset (detail mode shows a preview; this is the real count)."""
+    query = f"fields @log\n{_FILTER_CLAUSES[search_filter].rstrip()}\n| stats count() as matches by @log"
+    return inject_query_filters(query, tenant=tenant)
+
+
+HTTP_STATUS_BREAKDOWN_QUERY = (
+    "filter status >= 400 and status < 600\n"
+    "| stats count() as matches by status\n"
+    "| sort matches desc\n"
+    "| limit 12"
+)
 
 
 def resolve_log_search_query(

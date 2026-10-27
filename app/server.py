@@ -4,6 +4,7 @@ import os
 import re
 import time
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,7 +24,15 @@ from pydantic import BaseModel, Field
 
 from app.config import *
 from app.agent import find_api_connection_error, get_openai_tools, get_system_prompt, run_agent
-from app.queries import LOG_SEARCH_QUERY_PRESETS, LogResponseMode, LogSearchFilter, resolve_log_search_query
+from app.queries import (
+    HTTP_STATUS_BREAKDOWN_QUERY,
+    LOG_SEARCH_QUERY_PRESETS,
+    LogResponseMode,
+    LogSearchFilter,
+    _FILTER_CLAUSES,
+    resolve_count_query,
+    resolve_log_search_query,
+)
 
 logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -67,7 +76,8 @@ CLOUDWATCH_TOOLS = {
         "**Do NOT use when the user named one exact full log group path** — use query_log_group instead. "
         "Use here for: system-wide counts/rankings, multiple groups, or fuzzy keywords "
         "('api gateway logları' without a full path). "
-        "Scope: omit log_group_names for system-wide default groups; "
+        "Scope: omit log_group_names AND log_group_name_keywords for a true system-wide search over every "
+        "runtime log group (CI/codebuild groups excluded); "
         "pass log_group_names for specific groups (A, B, E, F…). "
         "response_mode: summary=counts per group (system-wide 500/errors), "
         "count_only=counts for named groups only (no log lines), "
@@ -107,14 +117,6 @@ CLOUDWATCH_TOOLS = {
 }
 
 ALLOWED_TOOL_NAMES = set(CLOUDWATCH_TOOLS.keys())
-
-DEFAULT_LOG_SEARCH_KEYWORDS = [
-    "containerinsights",
-    "api-gateway",
-    "alb",
-    "lambda",
-    "cloudfront",
-]
 
 # ---------------------------------------------------------------------------
 # MCP app
@@ -184,18 +186,37 @@ def resolve_query_time_window(
     hours: int | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
+    minutes: int | None = None,
 ) -> tuple[datetime, datetime, int]:
     if start_time and end_time:
         start_dt = parse_time(start_time)
         end_dt = parse_time(end_time)
+    elif minutes:
+        end_dt = utc_now()
+        start_dt = end_dt - timedelta(minutes=min(168 * 60, max(1, int(minutes))))
     else:
         hours_val = min(168, max(1, int(hours or 1)))
         end_dt = utc_now()
         start_dt = end_dt - timedelta(hours=hours_val)
     if end_dt <= start_dt:
         raise ValueError("end_time must be after start_time")
-    hours_out = max(1, int((end_dt - start_dt).total_seconds() // 3600) or 1)
+    hours_out = max(1, -(-int((end_dt - start_dt).total_seconds()) // 3600))
     return start_dt, end_dt, hours_out
+
+
+def describe_time_window(
+    *,
+    minutes: int | None,
+    start_time: str | None,
+    end_time: str | None,
+    period_label: str | None,
+) -> str | None:
+    """Human label when the window is not a plain "son N saat" (sub-hour or fixed range)."""
+    if start_time and end_time:
+        return (period_label or "").strip() or None
+    if minutes and int(minutes) % 60:
+        return f"son {int(minutes)} dakika"
+    return None
 
 
 def normalize_log_group_path(raw: str) -> str:
@@ -213,8 +234,8 @@ def normalize_insights_log_group(value: str) -> str:
         return ""
     if ":log-group:" in text:
         return text.split(":log-group:", 1)[-1]
-    # CloudWatch Insights @log field: 123456789012:/aws/lambda/my-fn
-    if re.match(r"^\d+:(/.+)", text):
+    # CloudWatch Insights @log field: 123456789012:/aws/lambda/my-fn (or 123456789012:API-Gateway-...)
+    if re.match(r"^\d{12}:.+", text):
         return text.split(":", 1)[1]
     return text
 
@@ -457,28 +478,63 @@ def format_log_groups_list(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_log_group_catalog: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+def get_log_group_catalog(logs_client) -> list[dict[str, Any]]:
+    """All log groups in the region (name + class), cached for LOG_GROUP_CATALOG_TTL seconds."""
+    region = getattr(getattr(logs_client, "meta", None), "region_name", None) or AWS_REGION
+    cached = _log_group_catalog.get(region)
+    if cached and time.time() - cached[0] < LOG_GROUP_CATALOG_TTL:
+        return cached[1]
+    catalog = [
+        {
+            "logGroupName": group["logGroupName"],
+            "logGroupClass": group.get("logGroupClass") or "STANDARD",
+        }
+        for group in fetch_log_groups(logs_client, max_items=10_000)
+        if group.get("logGroupName")
+    ]
+    _log_group_catalog[region] = (time.time(), catalog)
+    return catalog
+
+
+def is_excluded_from_scan(name: str, keywords: list[str]) -> bool:
+    """CI/build log groups are noise for runtime error searches unless the user asked for them."""
+    for prefix in SYSTEM_SCAN_EXCLUDE_PREFIXES:
+        if not name.startswith(prefix):
+            continue
+        prefix_token = normalize_log_group_token(prefix)
+        if any(normalize_log_group_token(k) and normalize_log_group_token(k) in prefix_token for k in keywords):
+            return False
+        return True
+    return False
+
+
 def collect_log_group_names_for_search(
     logs_client,
-    keywords: list[str],
+    keywords: list[str] | None,
     *,
-    max_groups: int = INSIGHTS_MAX_LOG_GROUPS,
+    max_groups: int = SEARCH_MAX_LOG_GROUPS,
 ) -> list[str]:
-    names: list[str] = []
-    per_keyword = max(5, max_groups // max(1, len(keywords)))
-    for keyword in keywords:
-        prefix = normalize_log_group_prefix_arg(keyword) or keyword
-        filtered, _ = _search_log_groups_by_keyword(
-            logs_client,
-            search_label=keyword,
-            prefix=prefix,
-            max_items=per_keyword,
+    """Log groups to search: every group (system scope) or every fuzzy keyword match.
+
+    Insights accepts 50 groups per query; callers batch via execute_insights_query_batched.
+    """
+    keywords = [k for k in (keywords or []) if k and k.strip()]
+    catalog = get_log_group_catalog(logs_client)
+    matched = filter_log_groups_fuzzy_any(catalog, keywords) if keywords else catalog
+    names = [
+        group["logGroupName"]
+        for group in matched
+        if not is_excluded_from_scan(group["logGroupName"], keywords)
+    ]
+    if len(names) > max_groups:
+        logger.warning(
+            "Log group search scope truncated: %d groups matched, searching first %d",
+            len(names),
+            max_groups,
         )
-        for item in filtered:
-            name = item.get("logGroupName")
-            if name:
-                names.append(name)
-        if len(names) >= max_groups:
-            break
     return list(dict.fromkeys(names))[:max_groups]
 
 
@@ -486,7 +542,7 @@ def resolve_explicit_log_group_names(
     logs_client,
     names: list[str],
     *,
-    max_groups: int = INSIGHTS_MAX_LOG_GROUPS,
+    max_groups: int = SEARCH_MAX_LOG_GROUPS,
 ) -> list[str]:
     """Resolve user-supplied log group labels to full CloudWatch log group paths."""
     resolved: list[str] = []
@@ -532,9 +588,9 @@ def resolve_search_log_groups(
     *,
     log_group_names: list[str] | None = None,
     log_group_name_keywords: list[str] | None = None,
-    max_groups: int = INSIGHTS_MAX_LOG_GROUPS,
+    max_groups: int = SEARCH_MAX_LOG_GROUPS,
 ) -> tuple[list[str], list[str], list[str]]:
-    """Return (group_names, keywords_tried, explicit_labels)."""
+    """Return (group_names, keywords_tried, explicit_labels). No keywords → whole system."""
     explicit = [n.strip() for n in (log_group_names or []) if n and n.strip()]
     if explicit:
         resolved = resolve_explicit_log_group_names(
@@ -543,7 +599,7 @@ def resolve_search_log_groups(
         return resolved, explicit, explicit
 
     keywords = dedupe_search_keywords(
-        [k.strip() for k in (log_group_name_keywords or DEFAULT_LOG_SEARCH_KEYWORDS) if k and k.strip()]
+        [k.strip() for k in (log_group_name_keywords or []) if k and k.strip()]
     )
     groups = collect_log_group_names_for_search(logs_client, keywords, max_groups=max_groups)
     return groups, keywords, []
@@ -817,6 +873,135 @@ def execute_insights_query(
     return completed
 
 
+def batch_log_groups_for_insights(logs_client, names: list[str]) -> list[list[str]]:
+    """Split into ≤50-group batches; one Insights query cannot mix log classes."""
+    if len(names) <= 1:
+        return [list(names)] if names else []
+    classes = {g["logGroupName"]: g["logGroupClass"] for g in get_log_group_catalog(logs_client)}
+    by_class: dict[str, list[str]] = {}
+    for name in names:
+        by_class.setdefault(classes.get(name, "STANDARD"), []).append(name)
+    size = INSIGHTS_MAX_LOG_GROUPS
+    return [group[i : i + size] for group in by_class.values() for i in range(0, len(group), size)]
+
+
+def _row_fields(row: list[Any]) -> dict[str, str]:
+    return {str(item.get("field", "")): str(item.get("value", "")) for item in row if isinstance(item, dict)}
+
+
+def merge_insights_results(
+    results: list[Any],
+    *,
+    sum_field: str | None = None,
+) -> list[Any]:
+    """Merge rows from several batches.
+
+    sum_field set → stats rows: add sum_field across rows sharing the other fields, sort desc.
+    Otherwise → log lines: newest first.
+    """
+    if sum_field is None:
+        return sorted(
+            results,
+            key=lambda row: _row_fields(row).get("@timestamp", ""),
+            reverse=True,
+        )
+    totals: dict[tuple[tuple[str, str], ...], float] = {}
+    passthrough: list[Any] = []
+    for row in results:
+        fields = _row_fields(row)
+        if sum_field not in fields:
+            passthrough.append(row)
+            continue
+        key = tuple(sorted((k, v) for k, v in fields.items() if k != sum_field))
+        try:
+            totals[key] = totals.get(key, 0.0) + float(fields.get(sum_field) or 0)
+        except ValueError:
+            continue
+    merged = [
+        [{"field": k, "value": v} for k, v in key] + [{"field": sum_field, "value": str(int(total))}]
+        for key, total in totals.items()
+    ]
+    merged.sort(key=lambda row: -float(_row_fields(row)[sum_field]))
+    return merged + passthrough
+
+
+def execute_insights_query_batched(
+    logs_client,
+    *,
+    log_group_names: list[str],
+    query_string: str,
+    start: int,
+    end: int,
+    context: str = "agent",
+    sum_field: str | None = None,
+) -> dict[str, Any]:
+    """Run one Insights query over any number of log groups (parallel ≤50-group batches)."""
+    batches = batch_log_groups_for_insights(logs_client, log_group_names)
+    if len(batches) <= 1:
+        return execute_insights_query(
+            logs_client,
+            log_group_names=log_group_names,
+            query_string=query_string,
+            start=start,
+            end=end,
+            context=context,
+        )
+
+    def run_batch(index: int, batch: list[str]) -> dict[str, Any]:
+        return execute_insights_query(
+            logs_client,
+            log_group_names=batch,
+            query_string=query_string,
+            start=start,
+            end=end,
+            context=f"{context} batch {index + 1}/{len(batches)}",
+        )
+
+    with ThreadPoolExecutor(max_workers=min(INSIGHTS_MAX_CONCURRENCY, len(batches))) as pool:
+        futures = [pool.submit(run_batch, i, batch) for i, batch in enumerate(batches)]
+    completed: list[dict[str, Any]] = []
+    errors: list[ClientError] = []
+    for future in futures:
+        try:
+            completed.append(future.result())
+        except ClientError as exc:
+            errors.append(exc)
+    if not completed:
+        raise errors[0]
+
+    rows = [row for item in completed for row in item.get("results") or []]
+    statuses = [str(item.get("status")) for item in completed]
+    statistics: dict[str, float] = {}
+    for item in completed:
+        for key, value in (item.get("statistics") or {}).items():
+            if isinstance(value, (int, float)):
+                statistics[key] = statistics.get(key, 0) + value
+    status = next((st for st in statuses if st != "Complete"), "Complete")
+    if errors and status == "Complete":
+        status = "Partial"
+    return {
+        "status": status,
+        "results": merge_insights_results(rows, sum_field=sum_field),
+        "statistics": statistics,
+        "query_id": ",".join(str(item.get("query_id")) for item in completed),
+        "batches": len(batches),
+        "failed_batches": len(errors),
+    }
+
+
+def run_insights_jobs(jobs: dict[str, Any]) -> dict[str, Any]:
+    """Run independent zero-arg Insights callables concurrently; exceptions are returned, not raised."""
+    results: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
+        futures = {name: pool.submit(fn) for name, fn in jobs.items()}
+    for name, future in futures.items():
+        try:
+            results[name] = future.result()
+        except ClientError as exc:
+            results[name] = exc
+    return results
+
+
 # ---------------------------------------------------------------------------
 # CloudWatch MCP tools (boto3)
 # ---------------------------------------------------------------------------
@@ -1021,6 +1206,10 @@ def query_log_group(
             ),
         ),
     ] = 1,
+    minutes: Annotated[
+        Optional[int],
+        Field(description="Lookback in minutes for sub-hour windows ('son 30 dakika' → 30). Overrides hours."),
+    ] = None,
     start_time: Annotated[
         Optional[str],
         Field(description="ISO-8601 UTC start. Use with end_time for comparisons or exact windows."),
@@ -1028,6 +1217,10 @@ def query_log_group(
     end_time: Annotated[
         Optional[str],
         Field(description="ISO-8601 UTC end. Use with start_time."),
+    ] = None,
+    period_label: Annotated[
+        Optional[str],
+        Field(description="Human label for a fixed window, e.g. 'Dün' / 'Bugün'."),
     ] = None,
     search_filter: Annotated[
         LogSearchFilter,
@@ -1061,6 +1254,7 @@ def query_log_group(
             hours=hours,
             start_time=start_time,
             end_time=end_time,
+            minutes=minutes,
         )
     except ValueError as exc:
         return {
@@ -1069,29 +1263,44 @@ def query_log_group(
             "match_count": 0,
             "results": [],
         }
+    window_label = describe_time_window(
+        minutes=minutes, start_time=start_time, end_time=end_time, period_label=period_label
+    )
 
+    tenant = (tenant_filter or "").strip() or None
+    rank_results = response_mode in {"summary", "count_only"}
     query_string = resolve_log_search_query(
         search_filter,
-        rank_by_log_group=(response_mode in {"summary", "count_only"}),
+        rank_by_log_group=rank_results,
         line_limit=min(500, max(1, int(max_result_lines))),
         rank_limit=1,
-        tenant=(tenant_filter or "").strip() or None,
+        tenant=tenant,
     )
     start = to_epoch_seconds(start_dt)
     end = to_epoch_seconds(end_dt)
 
-    try:
-        completed = execute_insights_query(
+    def insights(query: str, label: str):
+        return lambda: execute_insights_query(
             logs_client,
             log_group_name=log_group_name,
-            query_string=query_string,
+            query_string=query,
             start=start,
             end=end,
-            context=f"query_log_group:{search_filter}",
+            context=f"query_log_group:{search_filter}:{label}",
         )
-    except ClientError as exc:
+
+    jobs = {"main": insights(query_string, response_mode)}
+    if not rank_results:
+        # Detail/analysis return a preview; count the real total separately.
+        jobs["count"] = insights(resolve_count_query(search_filter, tenant=tenant), "count")
+    if search_filter == "errors" and not tenant:
+        jobs["status_breakdown"] = insights(HTTP_STATUS_BREAKDOWN_QUERY, "status")
+    outcomes = run_insights_jobs(jobs)
+
+    completed = outcomes["main"]
+    if isinstance(completed, ClientError):
         return {
-            "error": str(exc),
+            "error": str(completed),
             "log_group_name": log_group_name,
             "hours": hours_out,
             "start_time": iso_utc(start_dt),
@@ -1103,7 +1312,6 @@ def query_log_group(
         }
 
     raw_results = completed.get("results", [])
-    rank_results = response_mode in {"summary", "count_only"}
     limit = 1 if rank_results else min(500, max(1, int(max_result_lines)))
     if response_mode == "analysis":
         limit = min(500, max(50, int(max_result_lines)))
@@ -1113,22 +1321,29 @@ def query_log_group(
         limit=limit,
         max_message_chars=None if response_mode in {"detail", "analysis"} else 240,
     )
-    if rank_results and formatted:
-        try:
-            match_total = int(float(formatted[0].get("matches") or len(raw_results)))
-        except ValueError:
-            match_total = len(raw_results)
+    if rank_results:
+        match_total = sum_stat_rows(raw_results, "matches")
     else:
-        match_total = len(raw_results)
+        counted = outcomes.get("count")
+        match_total = (
+            sum_stat_rows(counted.get("results") or [], "matches")
+            if isinstance(counted, dict) and counted.get("status") == "Complete"
+            else len(raw_results)
+        )
+        match_total = max(match_total, len(formatted))
+    status_breakdown = parse_status_breakdown(outcomes.get("status_breakdown"))
     return {
         "status": completed.get("status"),
         "region": region or AWS_REGION,
         "log_group_name": log_group_name,
         "hours": hours_out,
+        "window_minutes": int(minutes) if minutes and not (start_time and end_time) else None,
+        "window_label": window_label,
+        "period_label": period_label,
         "start_time": iso_utc(start_dt),
         "end_time": iso_utc(end_dt),
         "search_filter": search_filter,
-        "tenant_filter": (tenant_filter or "").strip() or None,
+        "tenant_filter": tenant,
         "response_mode": response_mode,
         "query_string": query_string,
         "query_id": completed.get("query_id"),
@@ -1136,10 +1351,52 @@ def query_log_group(
         "all_log_group_names": [log_group_name],
         "match_count": match_total,
         "total_matches": match_total,
+        "shown_count": 0 if rank_results else len(formatted),
         "max_result_lines": limit,
         "results": formatted,
-        "truncated": len(raw_results) > limit,
+        "truncated": not rank_results and match_total > len(formatted),
+        "status_breakdown": status_breakdown,
+        "bytes_scanned": total_bytes_scanned(outcomes),
     }
+
+
+def total_bytes_scanned(outcomes: dict[str, Any]) -> int:
+    return int(
+        sum(
+            (item.get("statistics") or {}).get("bytesScanned") or 0
+            for item in outcomes.values()
+            if isinstance(item, dict)
+        )
+    )
+
+
+def sum_stat_rows(results: list[Any], field: str) -> int:
+    total = 0
+    for row in results:
+        if not isinstance(row, list):
+            continue
+        try:
+            total += int(float(_row_fields(row).get(field) or 0))
+        except ValueError:
+            continue
+    return total
+
+
+def parse_status_breakdown(completed: Any) -> list[dict[str, Any]]:
+    """[{status, count}] for 4xx/5xx responses (access logs); empty for non-HTTP groups."""
+    if not isinstance(completed, dict) or completed.get("status") != "Complete":
+        return []
+    breakdown: list[dict[str, Any]] = []
+    for row in completed.get("results") or []:
+        fields = _row_fields(row) if isinstance(row, list) else {}
+        status = fields.get("status", "").strip()
+        if not status.isdigit():
+            continue
+        try:
+            breakdown.append({"status": status, "count": int(float(fields.get("matches") or 0))})
+        except ValueError:
+            continue
+    return breakdown
 
 
 @mcp.tool(name="analyze_log_group", description=CLOUDWATCH_TOOLS["analyze_log_group"])
@@ -1280,6 +1537,10 @@ def search_logs_across_groups(
             ),
         ),
     ] = 1,
+    minutes: Annotated[
+        Optional[int],
+        Field(description="Lookback in minutes for sub-hour windows ('son 30 dakika' → 30). Overrides hours."),
+    ] = None,
     start_time: Annotated[
         Optional[str],
         Field(description="ISO-8601 UTC start for exact windows and comparisons."),
@@ -1323,7 +1584,7 @@ def search_logs_across_groups(
                 "Specific log groups when user named multiple exact paths or labels. "
                 "Do NOT use keywords here when user gave one full path — use query_log_group instead. "
                 "Examples: ['/aws/apigateway/x/access', '/aws/lambda/y']. "
-                "Omit for system-wide default search."
+                "Omit for system-wide search (all runtime log groups)."
             ),
         ),
     ] = None,
@@ -1352,6 +1613,7 @@ def search_logs_across_groups(
         log_group_names=log_group_names,
         log_group_name_keywords=log_group_name_keywords,
     )
+    scope = "explicit" if explicit_labels else ("keywords" if keywords else "system")
     if not group_names:
         return {
             "error": "Arama için uygun log group bulunamadı.",
@@ -1361,15 +1623,20 @@ def search_logs_across_groups(
             "results": [],
         }
 
+    tenant = (tenant_filter or "").strip() or None
     rank_results = mode in {"summary", "count_only"}
+    rank_limit = min(50, max(1, int(max_result_lines)))
+    count_query: str | None = None
     if search_filter:
         resolved_query = resolve_log_search_query(
             search_filter,
             rank_by_log_group=rank_results,
             line_limit=min(500, max(1, int(max_result_lines))),
-            rank_limit=min(50, max(len(group_names), int(max_result_lines))),
-            tenant=(tenant_filter or "").strip() or None,
+            rank_limit=50,
+            tenant=tenant,
         )
+        if not rank_results:
+            count_query = resolve_count_query(search_filter, tenant=tenant)
     elif query_string and query_string.strip():
         resolved_query = query_string.strip()
         if rank_results and "stats count()" not in resolved_query.lower():
@@ -1380,7 +1647,7 @@ def search_logs_across_groups(
                 f"fields @log\n{filter_body.rstrip()}\n"
                 f"| stats count() as matches by @log\n"
                 f"| sort matches desc\n"
-                f"| limit {min(50, max(1, int(max_result_lines)))}"
+                f"| limit 50"
             )
     else:
         return {
@@ -1394,6 +1661,7 @@ def search_logs_across_groups(
             hours=hours,
             start_time=start_time,
             end_time=end_time,
+            minutes=minutes,
         )
     except ValueError as exc:
         return {
@@ -1403,22 +1671,34 @@ def search_logs_across_groups(
             "match_count": 0,
             "results": [],
         }
+    window_label = describe_time_window(
+        minutes=minutes, start_time=start_time, end_time=end_time, period_label=period_label
+    )
 
     start = to_epoch_seconds(start_dt)
     end = to_epoch_seconds(end_dt)
 
-    try:
-        completed = execute_insights_query(
+    def insights(query: str, label: str, sum_field: str | None):
+        return lambda: execute_insights_query_batched(
             logs_client,
             log_group_names=group_names,
-            query_string=resolved_query,
+            query_string=query,
             start=start,
             end=end,
-            context=f"search_logs_across_groups:{mode}",
+            context=f"search_logs_across_groups:{label}",
+            sum_field=sum_field,
         )
-    except ClientError as exc:
+
+    is_ranked_query = rank_results or "stats count()" in resolved_query.lower()
+    jobs = {"main": insights(resolved_query, mode, "matches" if is_ranked_query else None)}
+    if count_query:
+        jobs["count"] = insights(count_query, "count", "matches")
+    outcomes = run_insights_jobs(jobs)
+
+    completed = outcomes["main"]
+    if isinstance(completed, ClientError):
         return {
-            "error": str(exc),
+            "error": str(completed),
             "log_groups_searched": len(group_names),
             "log_group_names": group_names[:10],
             "keywords_tried": keywords,
@@ -1434,46 +1714,58 @@ def search_logs_across_groups(
 
     results = completed.get("results", [])
     max_lines = min(500, max(1, int(max_result_lines)))
+    if rank_results:
+        total_matches = sum_stat_rows(results, "matches")
+        groups_with_matches = len(results)
+        results = results[:rank_limit]
+    else:
+        counted = outcomes.get("count")
+        if isinstance(counted, dict) and counted.get("status") in {"Complete", "Partial"}:
+            total_matches = sum_stat_rows(counted.get("results") or [], "matches")
+            groups_with_matches = len(counted.get("results") or [])
+        else:
+            total_matches = len(results)
+            groups_with_matches = len({_row_fields(r).get("@log") for r in results if isinstance(r, list)})
     formatted = format_insights_rows(
         results,
-        limit=max_lines if not rank_results else 50,
+        limit=max_lines if not rank_results else rank_limit,
         max_message_chars=None
         if mode in {"detail", "analysis"} and not rank_results
         else 240,
     )
-    total_matches = 0
-    if rank_results:
-        for row in formatted:
-            try:
-                total_matches += int(float(row.get("matches") or 0))
-            except ValueError:
-                continue
-    else:
-        total_matches = len(results)
+    total_matches = max(total_matches, 0 if rank_results else len(formatted))
 
     return {
         "status": completed.get("status"),
         "region": region or AWS_REGION,
         "hours": hours_out,
+        "window_minutes": int(minutes) if minutes and not (start_time and end_time) else None,
+        "window_label": window_label,
         "start_time": iso_utc(start_dt),
         "end_time": iso_utc(end_dt),
         "period_label": period_label,
         "response_mode": mode,
         "rank_by_log_group": rank_results,
+        "scope": scope,
+        "excluded_prefixes": SYSTEM_SCAN_EXCLUDE_PREFIXES if scope != "explicit" else [],
         "log_groups_searched": len(group_names),
+        "insights_batches": completed.get("batches", 1),
         "all_log_group_names": group_names,
         "log_group_names": group_names[:15],
         "requested_log_group_names": explicit_labels,
         "keywords_tried": keywords,
         "search_filter": search_filter,
-        "tenant_filter": (tenant_filter or "").strip() or None,
+        "tenant_filter": tenant,
         "query_string": resolved_query,
         "query_id": completed.get("query_id"),
-        "match_count": total_matches if rank_results else len(results),
+        "match_count": total_matches,
         "total_matches": total_matches,
+        "groups_with_matches": groups_with_matches,
+        "shown_count": 0 if rank_results else len(formatted),
         "max_result_lines": max_lines,
         "results": formatted,
-        "truncated": len(results) > max_lines,
+        "truncated": (groups_with_matches > len(formatted)) if rank_results else total_matches > len(formatted),
+        "bytes_scanned": total_bytes_scanned(outcomes),
     }
 
 
@@ -1576,6 +1868,55 @@ def get_alarm_history(
     }
 
 
+# Dimension set that holds the per-resource "total" series for each namespace. Summing every
+# series in a namespace double-counts (ApiName, ApiName+Stage, ApiName+Resource+Method, ...).
+METRIC_AGGREGATE_DIMENSIONS: dict[str, list[str]] = {
+    "AWS/Lambda": [],
+    "AWS/ApiGateway": ["ApiName"],
+    "AWS/ECS": ["ClusterName", "ServiceName"],
+    "AWS/ApplicationELB": ["LoadBalancer"],
+    "AWS/NetworkELB": ["LoadBalancer"],
+    "AWS/RDS": ["DBInstanceIdentifier"],
+    "AWS/EC2": ["InstanceId"],
+    "AWS/SQS": ["QueueName"],
+    "AWS/SNS": ["TopicName"],
+    "AWS/DynamoDB": ["TableName"],
+    "AWS/CloudFront": ["DistributionId", "Region"],
+    "AWS/ElastiCache": ["CacheClusterId"],
+    "AWS/CodeBuild": ["ProjectName"],
+    "ContainerInsights": ["ClusterName"],
+}
+
+_METRICS_INSIGHTS_FUNCTION = {
+    "Average": "AVG",
+    "Sum": "SUM",
+    "Maximum": "MAX",
+    "Minimum": "MIN",
+    "SampleCount": "COUNT",
+}
+
+_COUNT_LIKE_METRIC_RE = re.compile(
+    r"(count|errors?$|^errors|invocations|throttles|requests|4xx|5xx|faults|"
+    r"numberof|failed|denied|evictions|builds)",
+    re.I,
+)
+
+
+def default_statistic_for_metric(metric_name: str) -> str:
+    """Sum for event counters (Errors, Count, 5XXError…); Average for gauges (CPU, latency…)."""
+    if re.search(r"rate|utilization|latency|duration|age|percent", metric_name, re.I):
+        return "Average"
+    return "Sum" if _COUNT_LIKE_METRIC_RE.search(metric_name) else "Average"
+
+
+def metrics_insights_expression(namespace: str, metric_name: str, statistic: str) -> str | None:
+    dims = METRIC_AGGREGATE_DIMENSIONS.get(namespace)
+    if dims is None:
+        return None
+    schema = ", ".join([f'"{namespace}"', *dims])
+    return f'SELECT {_METRICS_INSIGHTS_FUNCTION[statistic]}("{metric_name}") FROM SCHEMA({schema})'
+
+
 @mcp.tool(name="get_metric_data", description=CLOUDWATCH_TOOLS["get_metric_data"])
 def get_metric_data(
     namespace: Annotated[str, Field(description="CloudWatch metric namespace.")],
@@ -1583,43 +1924,57 @@ def get_metric_data(
     start_time: Annotated[str, Field(description="ISO-8601 UTC start time.")],
     end_time: Annotated[Optional[str], Field(description="ISO-8601 UTC end time.")] = None,
     statistic: Annotated[
-        Literal["Average", "Sum", "Maximum", "Minimum", "SampleCount"],
-        Field(description="Metric statistic."),
-    ] = "Average",
+        Optional[Literal["Average", "Sum", "Maximum", "Minimum", "SampleCount"]],
+        Field(description="Metric statistic. Omit to use Sum for counters (Errors, Count) and Average for gauges."),
+    ] = None,
     period: Annotated[int, Field(description="Period in seconds.")] = 300,
     dimensions: Annotated[
         Optional[list[dict[str, str]]],
-        Field(description='Dimensions, e.g. [{"Name": "InstanceId", "Value": "i-123"}].'),
+        Field(
+            description=(
+                'Dimensions, e.g. [{"Name": "InstanceId", "Value": "i-123"}]. '
+                "Omit for an account-wide aggregate across all resources."
+            )
+        ),
     ] = None,
     region: Annotated[Optional[str], Field(description="AWS region.")] = None,
 ) -> dict[str, Any]:
     cloudwatch = get_client("cloudwatch", region)
     end_dt = parse_time(end_time, default=utc_now())
     start_dt = parse_time(start_time)
+    statistic = statistic or default_statistic_for_metric(metric_name)
 
-    metric_query = {
-        "Id": "m1",
-        "MetricStat": {
-            "Metric": {
-                "Namespace": namespace,
-                "MetricName": metric_name,
-                "Dimensions": dimensions or [],
+    expression = None if dimensions else metrics_insights_expression(namespace, metric_name, statistic)
+    if expression:
+        metric_query: dict[str, Any] = {"Id": "m1", "Expression": expression, "Period": period}
+    else:
+        metric_query = {
+            "Id": "m1",
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": namespace,
+                    "MetricName": metric_name,
+                    "Dimensions": dimensions or [],
+                },
+                "Period": period,
+                "Stat": statistic,
             },
-            "Period": period,
-            "Stat": statistic,
-        },
-    }
+        }
 
     response = cloudwatch.get_metric_data(
         MetricDataQueries=[metric_query],
         StartTime=start_dt,
         EndTime=end_dt,
+        ScanBy="TimestampAscending",
     )
     return {
         "region": region or AWS_REGION,
         "namespace": namespace,
         "metric_name": metric_name,
         "statistic": statistic,
+        "aggregation": "account-wide" if expression else ("dimensions" if dimensions else "no-dimension series"),
+        "start_time": iso_utc(start_dt),
+        "end_time": iso_utc(end_dt),
         "results": response.get("MetricDataResults", []),
     }
 
@@ -1714,13 +2069,17 @@ def analyze_metric(
     start_time: Annotated[str, Field(description="ISO-8601 UTC start time.")],
     end_time: Annotated[Optional[str], Field(description="ISO-8601 UTC end time.")] = None,
     statistic: Annotated[
-        Literal["Average", "Sum", "Maximum", "Minimum", "SampleCount"],
-        Field(description="Metric statistic."),
-    ] = "Average",
+        Optional[Literal["Average", "Sum", "Maximum", "Minimum", "SampleCount"]],
+        Field(description="Metric statistic. Omit to use Sum for counters (Errors, Count) and Average for gauges."),
+    ] = None,
     period: Annotated[int, Field(description="Period in seconds.")] = 300,
-    dimensions: Annotated[Optional[list[dict[str, str]]], Field(description="Metric dimensions.")] = None,
+    dimensions: Annotated[
+        Optional[list[dict[str, str]]],
+        Field(description="Metric dimensions. Omit for an account-wide aggregate."),
+    ] = None,
     region: Annotated[Optional[str], Field(description="AWS region.")] = None,
 ) -> dict[str, Any]:
+    statistic = statistic or default_statistic_for_metric(metric_name)
     metric_data = get_metric_data(
         namespace=namespace,
         metric_name=metric_name,
@@ -1732,16 +2091,24 @@ def analyze_metric(
         region=region,
     )
 
-    values: list[float] = []
-    timestamps: list[str] = []
+    points: list[tuple[datetime, float]] = []
     for result in metric_data.get("results", []):
-        values.extend(float(v) for v in result.get("Values", []))
-        timestamps.extend(result.get("Timestamps", []))
+        points.extend(
+            (ts if isinstance(ts, datetime) else parse_time(str(ts)), float(v))
+            for ts, v in zip(result.get("Timestamps", []), result.get("Values", []))
+        )
+    # Oldest → newest; the trend compares the later half against the earlier half.
+    points.sort(key=lambda point: point[0])
+    timestamps = [ts for ts, _ in points]
+    values = [v for _, v in points]
 
     if not values:
         return {
             "namespace": namespace,
             "metric_name": metric_name,
+            "statistic": statistic,
+            "start_time": metric_data.get("start_time"),
+            "end_time": metric_data.get("end_time"),
             "message": "No metric datapoints found for the given time range.",
         }
 
@@ -1763,9 +2130,20 @@ def analyze_metric(
         "min": min(values),
         "max": max(values),
         "average": sum(values) / len(values),
+        "sum": sum(values),
         "trend": trend,
+        "first_half_avg": first_avg,
+        "second_half_avg": second_avg,
+        "aggregation": metric_data.get("aggregation"),
+        "start_time": metric_data.get("start_time"),
+        "end_time": metric_data.get("end_time"),
         "first_timestamp": iso_utc(timestamps[0]) if timestamps else None,
         "last_timestamp": iso_utc(timestamps[-1]) if timestamps else None,
+        # Downsampled series for UI sparklines (≤120 points, chronological).
+        "series": [
+            [iso_utc(ts), round(v, 4)]
+            for ts, v in points[:: max(1, -(-len(points) // 120))]
+        ],
     }
 
 
@@ -1775,11 +2153,8 @@ logger.info("CloudWatch MCP tools registered (boto3)")
 # Dashboard API (direct CloudWatch — no LLM)
 # ---------------------------------------------------------------------------
 
-DASHBOARD_ERROR_FILTER = (
-    '| filter @message like /(?i)("Level":"Error"|ACCESS_DENIED|errorResponseType|statusCode":"5|'
-    'HTTP\\/1\\.[01] 5)/\n'
-    '| filter @message not like /"errorMessage":"-"|"Level":"Information"/\n'
-)
+# Same definition as the chat "errors" preset so dashboard and chat report identical totals.
+DASHBOARD_ERROR_FILTER = _FILTER_CLAUSES["errors"].rstrip() + "\n"
 
 _dashboard_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -1810,6 +2185,7 @@ def _parse_timeline_results(results: list[Any]) -> list[dict[str, Any]]:
             count = 0
         if timestamp:
             timeline.append({"timestamp": timestamp, "count": count})
+    timeline.sort(key=lambda point: point["timestamp"])
     return timeline
 
 
@@ -1839,18 +2215,20 @@ def _run_insights_query(
     query_string: str,
     start: int,
     end: int,
+    sum_field: str | None = None,
 ) -> list[Any]:
     if not log_group_names:
         return []
-    completed = execute_insights_query(
+    completed = execute_insights_query_batched(
         logs_client,
         log_group_names=log_group_names,
         query_string=query_string,
         start=start,
         end=end,
         context="dashboard",
+        sum_field=sum_field,
     )
-    if completed.get("status") != "Complete":
+    if completed.get("status") not in {"Complete", "Partial"}:
         return []
     return completed.get("results") or []
 
@@ -1863,7 +2241,7 @@ def get_dashboard_overview(hours: int = 24) -> dict[str, Any]:
         return cached[1]
 
     logs_client = get_client("logs")
-    group_names = collect_log_group_names_for_search(logs_client, DEFAULT_LOG_SEARCH_KEYWORDS)
+    group_names = collect_log_group_names_for_search(logs_client, None)
     end_dt = utc_now()
     start_dt = end_dt - timedelta(hours=hours)
     start = to_epoch_seconds(start_dt)
@@ -1890,22 +2268,31 @@ def get_dashboard_overview(hours: int = 24) -> dict[str, Any]:
 
     if group_names:
         try:
-            timeline_results = _run_insights_query(
-                logs_client,
-                log_group_names=group_names,
-                query_string=timeline_query,
-                start=start,
-                end=end,
+            outcomes = run_insights_jobs(
+                {
+                    "timeline": lambda: _run_insights_query(
+                        logs_client,
+                        log_group_names=group_names,
+                        query_string=timeline_query,
+                        start=start,
+                        end=end,
+                        sum_field="errors",
+                    ),
+                    "by_group": lambda: _run_insights_query(
+                        logs_client,
+                        log_group_names=group_names,
+                        query_string=by_group_query,
+                        start=start,
+                        end=end,
+                        sum_field="errors",
+                    ),
+                }
             )
-            errors_timeline = _parse_timeline_results(timeline_results)
-            by_group_results = _run_insights_query(
-                logs_client,
-                log_group_names=group_names,
-                query_string=by_group_query,
-                start=start,
-                end=end,
-            )
-            errors_by_log_group = _parse_errors_by_log_group(by_group_results)
+            for outcome in outcomes.values():
+                if isinstance(outcome, ClientError):
+                    raise outcome
+            errors_timeline = _parse_timeline_results(outcomes["timeline"])
+            errors_by_log_group = _parse_errors_by_log_group(outcomes["by_group"])[:12]
         except ClientError as exc:
             insights_error = str(exc)
 
@@ -1967,9 +2354,7 @@ def get_dashboard_error_details(
     if log_group_filter:
         group_names = [log_group_filter]
     else:
-        group_names = collect_log_group_names_for_search(
-            logs_client, DEFAULT_LOG_SEARCH_KEYWORDS
-        )
+        group_names = collect_log_group_names_for_search(logs_client, None)
 
     end_dt = utc_now()
     start_dt = end_dt - timedelta(hours=hours)
@@ -2040,6 +2425,8 @@ class ChatResponse(BaseModel):
     iterations: int
     log_context: dict[str, Any] | None = None
     log_export: dict[str, Any] | None = None
+    card: dict[str, Any] | None = None
+    suggestions: list[str] | None = None
 
 
 @asynccontextmanager
